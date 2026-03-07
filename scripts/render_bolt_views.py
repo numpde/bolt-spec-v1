@@ -25,6 +25,7 @@ CENTERLINE_RGBA = (150, 150, 150, 255)
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render side and top views for a bolt model")
     parser.add_argument("--size", choices=("m5", "m6"), default="m5")
+    parser.add_argument("--annotated-only", action="store_true")
     return parser.parse_args()
 
 
@@ -36,7 +37,7 @@ def spec_for_size(size: str) -> BoltSpec:
     raise ValueError(f"Unsupported size: {size}")
 
 
-def render_bolt_views(size: str) -> None:
+def render_bolt_views(size: str, annotated_only: bool = False) -> None:
     repo_root = Path(__file__).resolve().parent.parent
     export_dir = repo_root / "exports"
     export_dir.mkdir(exist_ok=True)
@@ -45,11 +46,23 @@ def render_bolt_views(size: str) -> None:
     threaded_canonical = build_bolt_canonical(spec)
     smooth_canonical = build_smooth_bolt(spec).rotate((0, 0, 0), (0, 1, 0), 90)
 
-    side_svg = _projected_svg(threaded_canonical, projection_dir=(0, 0, 1), width=900, height=320)
-    top_svg = _projected_svg(smooth_canonical, projection_dir=(-1, 0, 0), width=500, height=500)
+    side_width = 700 if annotated_only else 900
+    side_height = 260 if annotated_only else 320
+    top_width = 360 if annotated_only else 500
+    top_height = 360 if annotated_only else 500
+
+    side_svg = _projected_svg(threaded_canonical, projection_dir=(0, 0, 1), width=side_width, height=side_height)
+    top_svg = _projected_svg(smooth_canonical, projection_dir=(-1, 0, 0), width=top_width, height=top_height)
 
     side_projection = projection_from_svg(side_svg)
     top_projection = projection_from_svg(top_svg)
+
+    annotated_png_path = export_dir / f"bolt_{size}_annotated.png"
+    _render_annotated_sheet(spec, side_projection, top_projection, annotated_png_path)
+    print(f"exported {annotated_png_path}")
+
+    if annotated_only:
+        return
 
     side_svg_path = export_dir / f"bolt_{size}_side.svg"
     side_png_path = export_dir / f"bolt_{size}_side.png"
@@ -61,14 +74,10 @@ def render_bolt_views(size: str) -> None:
     _render_projection_png(side_projection, side_png_path)
     _render_projection_png(top_projection, top_png_path, pixels_per_mm=40.0)
 
-    annotated_png_path = export_dir / f"bolt_{size}_annotated.png"
-    _render_annotated_sheet(spec, side_projection, top_projection, annotated_png_path)
-
     print(f"exported {side_svg_path}")
     print(f"exported {side_png_path}")
     print(f"exported {top_svg_path}")
     print(f"exported {top_png_path}")
-    print(f"exported {annotated_png_path}")
 
     if size == "m5":
         reference_image_path = repo_root / "ref" / "alibaba-image-preview.png"
@@ -266,11 +275,13 @@ def _render_annotated_sheet(
 ) -> None:
     canvas_width = 1180
     canvas_height = 420
-    side_scale_px_per_mm = 28.0
-    top_scale_px_per_mm = 34.0
-    side_origin_x_px = 205.0
-    side_center_y_px = 225.0
-    top_center_x_px = 960.0
+    sheet_scale_px_per_mm, side_origin_x_px, side_center_y_px, top_center_x_px = _compute_annotated_layout(
+        spec,
+        side_projection,
+        top_projection,
+        canvas_width=canvas_width,
+        canvas_height=canvas_height,
+    )
     top_center_y_px = side_center_y_px
 
     image = Image.new("RGBA", (canvas_width, canvas_height), BACKGROUND_RGBA)
@@ -279,12 +290,12 @@ def _render_annotated_sheet(
     small_font = _load_font(14)
 
     side_mapper = lambda point: (
-        side_origin_x_px + point[0] * side_scale_px_per_mm,
-        side_center_y_px - point[1] * side_scale_px_per_mm,
+        side_origin_x_px + point[0] * sheet_scale_px_per_mm,
+        side_center_y_px - point[1] * sheet_scale_px_per_mm,
     )
     top_mapper = lambda point: (
-        top_center_x_px + point[0] * top_scale_px_per_mm,
-        top_center_y_px - point[1] * top_scale_px_per_mm,
+        top_center_x_px + point[0] * sheet_scale_px_per_mm,
+        top_center_y_px - point[1] * sheet_scale_px_per_mm,
     )
 
     _draw_projection_paths(draw, side_projection, side_mapper, DRAWING_LINE_RGBA, 2)
@@ -397,12 +408,64 @@ def _render_annotated_sheet(
 
     t25_target = min(T25_PROFILE_POINTS_MM, key=lambda point: point[1])
     t25_target_px = top_mapper(t25_target)
-    t25_text_pos = (top_center_x_px - 76, top_center_y_px + spec.head_radius_mm * top_scale_px_per_mm + 32)
-    t25_elbow = (top_center_x_px - 30, top_center_y_px + spec.head_radius_mm * top_scale_px_per_mm + 10)
+    t25_text_pos = (
+        top_center_x_px - 76,
+        top_center_y_px + spec.head_radius_mm * sheet_scale_px_per_mm + 32,
+    )
+    t25_elbow = (
+        top_center_x_px - 30,
+        top_center_y_px + spec.head_radius_mm * sheet_scale_px_per_mm + 10,
+    )
     draw.line([t25_text_pos, t25_elbow, t25_target_px], fill=DIMENSION_RGBA, width=1)
     _draw_text_with_background(image, t25_text_pos, "T25", font, anchor="lt")
 
     image.save(output_path)
+
+
+def _compute_annotated_layout(
+    spec: BoltSpec,
+    side_projection: Projection2D,
+    top_projection: Projection2D,
+    canvas_width: int,
+    canvas_height: int,
+) -> tuple[float, float, float, float]:
+    left_margin_px = 56.0
+    right_margin_px = 56.0
+    inter_view_gap_px = 96.0
+    side_center_y_px = 225.0
+    top_margin_px = 28.0
+    bottom_margin_px = 18.0
+
+    side_left_pad_mm = spec.head_height_mm + 1.6
+    side_right_pad_mm = 1.8
+    side_layout_width_mm = side_projection.width + side_left_pad_mm + side_right_pad_mm
+    top_layout_width_mm = top_projection.width
+
+    width_scale = (
+        canvas_width - left_margin_px - right_margin_px - inter_view_gap_px
+    ) / (side_layout_width_mm + top_layout_width_mm)
+
+    side_top_extent_mm = spec.head_radius_mm + 2.4
+    side_bottom_extent_mm = spec.head_radius_mm + 1.8
+    top_radius_mm = top_projection.height / 2.0
+    top_bottom_extra_px = 52.0
+
+    height_scale_top = (side_center_y_px - top_margin_px) / side_top_extent_mm
+    height_scale_side_bottom = (canvas_height - bottom_margin_px - side_center_y_px) / side_bottom_extent_mm
+    height_scale_top_bottom = (
+        canvas_height - bottom_margin_px - side_center_y_px - top_bottom_extra_px
+    ) / top_radius_mm
+
+    sheet_scale_px_per_mm = min(width_scale, height_scale_top, height_scale_side_bottom, height_scale_top_bottom)
+    side_origin_x_px = left_margin_px + side_left_pad_mm * sheet_scale_px_per_mm
+    top_center_x_px = (
+        left_margin_px
+        + side_layout_width_mm * sheet_scale_px_per_mm
+        + inter_view_gap_px
+        + (top_layout_width_mm * sheet_scale_px_per_mm) / 2.0
+    )
+
+    return sheet_scale_px_per_mm, side_origin_x_px, side_center_y_px, top_center_x_px
 
 
 def _draw_side_socket_hidden_outline(draw: ImageDraw.ImageDraw, mapper, spec: BoltSpec) -> None:
@@ -562,4 +625,4 @@ def _draw_rotated_text_with_background(
 
 if __name__ == "__main__":
     args = parse_args()
-    render_bolt_views(args.size)
+    render_bolt_views(args.size, annotated_only=args.annotated_only)
