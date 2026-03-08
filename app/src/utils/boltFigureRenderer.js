@@ -31,6 +31,10 @@
     .figure-wheel-zone:hover { fill: rgba(182, 64, 64, 0.12); stroke: rgba(182, 64, 64, 0.22); }
   `;
 
+  const getBoltFigureAriaLabel = (showTopView) => (
+    showTopView ? "Live bolt side and top views" : "Live bolt side view"
+  );
+
   const EXCLUDED_DRAG_HOTSPOT_KEYS = new Set([
     "underHeadLengthMm:start",
     "headHeightMm:end",
@@ -110,6 +114,42 @@
     axis,
     side,
   });
+
+  const buildDimensionCapLines = (dimension) => {
+    const capHalf = 6;
+
+    if (dimension.axis === "vertical") {
+      return [
+        {
+          x1: dimension.x1 - capHalf,
+          y1: dimension.y1,
+          x2: dimension.x1 + capHalf,
+          y2: dimension.y1,
+        },
+        {
+          x1: dimension.x2 - capHalf,
+          y1: dimension.y2,
+          x2: dimension.x2 + capHalf,
+          y2: dimension.y2,
+        },
+      ];
+    }
+
+    return [
+      {
+        x1: dimension.x1,
+        y1: dimension.y1 - capHalf,
+        x2: dimension.x1,
+        y2: dimension.y1 + capHalf,
+      },
+      {
+        x1: dimension.x2,
+        y1: dimension.y2 - capHalf,
+        x2: dimension.x2,
+        y2: dimension.y2 + capHalf,
+      },
+    ];
+  };
 
   const buildBoltFigureScene = (inputSpec, options = {}) => {
     const spec = normalizeBoltSpec(inputSpec);
@@ -206,6 +246,33 @@
       };
     };
 
+    const centerline = {
+      x1: showTopView ? centerX - topCircleRadiusPx - 18 : partLeftX - 18,
+      y1: sideCenterY,
+      x2: partRightX + 18,
+      y2: sideCenterY,
+    };
+    const socketHiddenLines = [
+      {
+        x1: partLeftX,
+        y1: sideCenterY - socketHalfHeightPx,
+        x2: socketDepthX,
+        y2: sideCenterY - socketHalfHeightPx,
+      },
+      {
+        x1: partLeftX,
+        y1: sideCenterY + socketHalfHeightPx,
+        x2: socketDepthX,
+        y2: sideCenterY + socketHalfHeightPx,
+      },
+      {
+        x1: socketDepthX,
+        y1: sideCenterY - socketHalfHeightPx,
+        x2: socketDepthX,
+        y2: sideCenterY + socketHalfHeightPx,
+      },
+    ];
+
     return {
       spec,
       detailLevel,
@@ -213,19 +280,12 @@
       viewHeight,
       showTopView,
       centerX,
-      sideCenterY,
-      sideTopY,
-      sideBottomY,
       topCenterY,
-      partLeftX,
-      partRightX,
       topCircleRadiusPx,
+      centerline,
       sideOutlinePath,
       torxPath,
-      socketDepthX,
-      socketHalfHeightPx,
-      shankStartPx,
-      tipPx,
+      socketHiddenLines,
       threadLines: {
         top: threadLines.topLines.map((line) => ({
           x1: mmToPxX(line.x1),
@@ -301,7 +361,10 @@
           axis: "horizontal",
           side: "bottom",
         })),
-      ],
+      ].map((dimension) => ({
+        ...dimension,
+        capLines: buildDimensionCapLines(dimension),
+      })),
     };
   };
 
@@ -309,21 +372,11 @@
     `<line class="${className}" x1="${line.x1}" y1="${line.y1}" x2="${line.x2}" y2="${line.y2}" />`
   );
 
-  const renderDimensionCaps = (dimension) => {
-    const capHalf = 6;
-
-    if (dimension.axis === "vertical") {
-      return [
-        `<line class="figure-dim" x1="${dimension.x1 - capHalf}" y1="${dimension.y1}" x2="${dimension.x1 + capHalf}" y2="${dimension.y1}" />`,
-        `<line class="figure-dim" x1="${dimension.x2 - capHalf}" y1="${dimension.y2}" x2="${dimension.x2 + capHalf}" y2="${dimension.y2}" />`,
-      ].join("");
-    }
-
-    return [
-      `<line class="figure-dim" x1="${dimension.x1}" y1="${dimension.y1 - capHalf}" x2="${dimension.x1}" y2="${dimension.y1 + capHalf}" />`,
-      `<line class="figure-dim" x1="${dimension.x2}" y1="${dimension.y2 - capHalf}" x2="${dimension.x2}" y2="${dimension.y2 + capHalf}" />`,
-    ].join("");
-  };
+  const renderDimensionCaps = (dimension) => (
+    dimension.capLines
+      .map((line) => renderLine("figure-dim", line))
+      .join("")
+  );
 
   const buildDimensionWheelRect = (dimension) => {
     if (!dimension.fieldName) {
@@ -457,37 +510,30 @@
       viewHeight,
       showTopView,
       centerX,
-      sideCenterY,
-      sideTopY,
-      sideBottomY,
       topCenterY,
       topCircleRadiusPx,
-      partLeftX,
-      partRightX,
+      centerline,
       sideOutlinePath,
       torxPath,
-      socketDepthX,
-      socketHalfHeightPx,
+      socketHiddenLines,
       threadLines,
       dimensions,
     } = scene;
 
     return [
-      `<svg class="figure-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewWidth} ${viewHeight}" role="img" aria-label="${showTopView ? "Live bolt side and top views" : "Live bolt side view"}">`,
+      `<svg class="figure-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewWidth} ${viewHeight}" role="img" aria-label="${getBoltFigureAriaLabel(showTopView)}">`,
       `<style>${FIGURE_SVG_STYLE}</style>`,
       `<rect x="0" y="0" width="${viewWidth}" height="${viewHeight}" fill="#f7f1e8" />`,
-      `<line class="figure-centerline" x1="${showTopView ? centerX - topCircleRadiusPx - 18 : partLeftX - 18}" y1="${sideCenterY}" x2="${partRightX + 18}" y2="${sideCenterY}" />`,
+      renderLine("figure-centerline", centerline),
       `<path class="figure-line" d="${sideOutlinePath}" />`,
       threadLines.top.map((line) => renderLine("figure-thread", line)).join(""),
       threadLines.bottom.map((line) => renderLine("figure-thread", line)).join(""),
-      `<line class="figure-hidden" x1="${partLeftX}" y1="${sideCenterY - socketHalfHeightPx}" x2="${socketDepthX}" y2="${sideCenterY - socketHalfHeightPx}" />`,
-      `<line class="figure-hidden" x1="${partLeftX}" y1="${sideCenterY + socketHalfHeightPx}" x2="${socketDepthX}" y2="${sideCenterY + socketHalfHeightPx}" />`,
-      `<line class="figure-hidden" x1="${socketDepthX}" y1="${sideCenterY - socketHalfHeightPx}" x2="${socketDepthX}" y2="${sideCenterY + socketHalfHeightPx}" />`,
+      socketHiddenLines.map((line) => renderLine("figure-hidden", line)).join(""),
       dimensions.map((dimension) => [
         `<line class="figure-dim" x1="${dimension.x1}" y1="${dimension.y1}" x2="${dimension.x2}" y2="${dimension.y2}" />`,
         renderDimensionCaps(dimension),
         includeWheelZones ? renderDimensionWheelZone(dimension) : "",
-        `<text class="figure-text" text-anchor="${dimension.textAnchor}" font-family="DejaVu Sans Mono, monospace" font-size="11" fill="#7f4e31" x="${dimension.textX}" y="${dimension.textY}">${escapeXml(dimension.label)}</text>`,
+        `<text class="figure-text" text-anchor="${dimension.textAnchor}" x="${dimension.textX}" y="${dimension.textY}">${escapeXml(dimension.label)}</text>`,
       ].join("")).join(""),
       showTopView
         ? `<circle class="figure-line" cx="${centerX}" cy="${topCenterY}" r="${topCircleRadiusPx}" />`
@@ -496,16 +542,18 @@
         ? `<path class="figure-line" d="${torxPath}" />`
         : "",
       showTopView
-        ? `<text class="figure-text" text-anchor="middle" font-family="DejaVu Sans Mono, monospace" font-size="11" fill="#7f4e31" x="${centerX}" y="${topCenterY + topCircleRadiusPx + 26}">${escapeXml(spec.driveLabel)}</text>`
+        ? `<text class="figure-text" text-anchor="middle" x="${centerX}" y="${topCenterY + topCircleRadiusPx + 26}">${escapeXml(spec.driveLabel)}</text>`
         : "",
       `</svg>`,
     ].join("");
   };
 
   return {
+    FIGURE_SVG_STYLE,
     buildBoltFigureScene,
     buildDragHotspots,
     buildWheelHotspots,
+    getBoltFigureAriaLabel,
     renderBoltFigureSvg,
   };
 });

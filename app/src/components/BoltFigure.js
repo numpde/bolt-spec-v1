@@ -1,9 +1,10 @@
 (function() {
   const {
+    FIGURE_SVG_STYLE,
     buildBoltFigureScene,
     buildDragHotspots,
     buildWheelHotspots,
-    renderBoltFigureSvg,
+    getBoltFigureAriaLabel,
     normalizeBoltSpec,
   } = window;
   const FIELD_CONFIG_MAP = Object.fromEntries(
@@ -94,6 +95,116 @@
     return { min, max };
   };
 
+  const BoltFigureSvg = React.memo(({ scene }) => {
+    const {
+      spec,
+      viewWidth,
+      viewHeight,
+      showTopView,
+      centerX,
+      centerline,
+      topCenterY,
+      topCircleRadiusPx,
+      sideOutlinePath,
+      torxPath,
+      socketHiddenLines,
+      threadLines,
+      dimensions,
+    } = scene;
+
+    return (
+      <svg
+        className="figure-svg"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox={`0 0 ${viewWidth} ${viewHeight}`}
+        role="img"
+        aria-label={getBoltFigureAriaLabel(showTopView)}
+      >
+        <style>{FIGURE_SVG_STYLE}</style>
+        <rect x="0" y="0" width={viewWidth} height={viewHeight} fill="#f7f1e8" />
+        <line className="figure-centerline" x1={centerline.x1} y1={centerline.y1} x2={centerline.x2} y2={centerline.y2} />
+        <path className="figure-line" d={sideOutlinePath} />
+        {threadLines.top.map((line, index) => (
+          <line
+            key={`thread-top:${index}`}
+            className="figure-thread"
+            x1={line.x1}
+            y1={line.y1}
+            x2={line.x2}
+            y2={line.y2}
+          />
+        ))}
+        {threadLines.bottom.map((line, index) => (
+          <line
+            key={`thread-bottom:${index}`}
+            className="figure-thread"
+            x1={line.x1}
+            y1={line.y1}
+            x2={line.x2}
+            y2={line.y2}
+          />
+        ))}
+        {socketHiddenLines.map((line, index) => (
+          <line
+            key={`hidden:${index}`}
+            className="figure-hidden"
+            x1={line.x1}
+            y1={line.y1}
+            x2={line.x2}
+            y2={line.y2}
+          />
+        ))}
+        {dimensions.map((dimension, index) => {
+          const dimensionKey = dimension.fieldName || `dimension-${index}`;
+
+          return (
+            <React.Fragment key={dimensionKey}>
+              <line
+                className="figure-dim"
+                x1={dimension.x1}
+                y1={dimension.y1}
+                x2={dimension.x2}
+                y2={dimension.y2}
+              />
+              {dimension.capLines.map((line, capIndex) => (
+                <line
+                  key={`${dimensionKey}:cap-${capIndex}`}
+                  className="figure-dim"
+                  x1={line.x1}
+                  y1={line.y1}
+                  x2={line.x2}
+                  y2={line.y2}
+                />
+              ))}
+              <text
+                className="figure-text"
+                textAnchor={dimension.textAnchor}
+                x={dimension.textX}
+                y={dimension.textY}
+              >
+                {dimension.label}
+              </text>
+            </React.Fragment>
+          );
+        })}
+        {showTopView ? (
+          <circle className="figure-line" cx={centerX} cy={topCenterY} r={topCircleRadiusPx} />
+        ) : null}
+        {showTopView ? <path className="figure-line" d={torxPath} /> : null}
+        {showTopView ? (
+          <text
+            className="figure-text"
+            textAnchor="middle"
+            x={centerX}
+            y={topCenterY + topCircleRadiusPx + 26}
+          >
+            {spec.driveLabel}
+          </text>
+        ) : null}
+      </svg>
+    );
+  });
+
   const BoltFigure = ({
     spec,
     onAdjustField,
@@ -182,15 +293,6 @@
     const dragHotspotsRef = React.useRef(dragHotspots);
     const specRef = React.useRef(spec);
     const showTopViewRef = React.useRef(showTopView);
-    const svgMarkup = React.useMemo(
-      () => renderBoltFigureSvg(visualState.spec, {
-        showTopView: visualState.showTopView,
-        detailLevel: renderDetailLevel,
-        includeWheelZones: false,
-      }),
-      [visualState.spec, visualState.showTopView, renderDetailLevel]
-    );
-
     React.useEffect(() => {
       handlersRef.current = {
         onAdjustField,
@@ -758,10 +860,9 @@
         ref={containerRef}
         className="figure-wrap"
       >
-        <div
-          className="figure-svg-layer"
-          dangerouslySetInnerHTML={{ __html: svgMarkup }}
-        />
+        <div className="figure-svg-layer">
+          <BoltFigureSvg scene={scene} />
+        </div>
         <div className="figure-interaction-overlay" aria-hidden="true">
           {visibleWheelHotspots.map((hotspot) => (
             <div

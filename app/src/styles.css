@@ -45,9 +45,12 @@ input {
 }
 
 .app-shell {
+  width: min(100%, 1240px);
   display: grid;
   grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
   gap: 24px;
+  align-items: start;
+  margin: 0 auto;
   padding: 24px;
 }
 
@@ -84,7 +87,6 @@ input {
 }
 
 .preview-card {
-  min-height: calc(100vh - 48px);
   padding: 22px;
 }
 

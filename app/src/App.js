@@ -19,7 +19,6 @@
     PresetPicker,
     ParameterPanel,
     BoltFigure,
-    SpecSummary,
   } = window;
   const EDITABLE_FIELD_NAMES = BOLT_FIELDS.map((field) => field.name);
   const fieldMap = Object.fromEntries(BOLT_FIELDS.map((field) => [field.name, field]));
@@ -66,10 +65,6 @@
     const pendingHistorySyncRef = React.useRef(null);
     const deferredDraftSpec = React.useDeferredValue(draftSpec);
     const spec = React.useMemo(() => normalizeBoltSpec(draftSpec), [draftSpec]);
-    const deferredSpec = React.useMemo(
-      () => normalizeBoltSpec(deferredDraftSpec),
-      [deferredDraftSpec]
-    );
     const activePresetKey = React.useMemo(
       () => getMatchingPresetKey(draftSpec),
       [draftSpec]
@@ -388,8 +383,6 @@
             spec={deferredDraftSpec}
             onFieldChange={handleFieldChange}
           />
-
-          <SpecSummary spec={deferredSpec} />
         </aside>
       </div>
     );
