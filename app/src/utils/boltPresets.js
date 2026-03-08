@@ -64,8 +64,8 @@
     {
       name: "threadedLengthMm",
       label: "Threaded Length",
-      hint: "Threaded portion of the shank",
-      min: 2,
+      hint: "Threaded portion of the shank, capped to under-head length minus 5 mm",
+      min: 0.5,
       max: 60,
       step: 0.5,
     },

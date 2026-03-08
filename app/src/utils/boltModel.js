@@ -12,16 +12,21 @@
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
   const T25_OUTER_RADIUS_MM = 2.25;
   const T25_INNER_RADIUS_MM = 1.625;
+  const THREAD_LENGTH_OFFSET_MM = 5;
 
   const round3 = (value) => Math.round(value * 1000) / 1000;
+  const getThreadedLengthMaxMm = (underHeadLengthMm) => (
+    Math.max(0.5, underHeadLengthMm - THREAD_LENGTH_OFFSET_MM)
+  );
 
   const normalizeBoltSpec = (inputSpec) => {
     const nominalDiameterMm = clamp(Number(inputSpec.nominalDiameterMm) || 5, 1, 40);
     const underHeadLengthMm = clamp(Number(inputSpec.underHeadLengthMm) || 18, 1, 200);
+    const threadedLengthMaxMm = getThreadedLengthMaxMm(underHeadLengthMm);
     const threadedLengthMm = clamp(
       Number(inputSpec.threadedLengthMm) || underHeadLengthMm,
       0.5,
-      underHeadLengthMm
+      threadedLengthMaxMm
     );
     const headHeightMm = clamp(Number(inputSpec.headHeightMm) || 3, 0.5, 30);
     const headDiameterMm = clamp(
@@ -77,6 +82,8 @@
   };
 
   return {
+    getThreadedLengthMaxMm,
+    THREAD_LENGTH_OFFSET_MM,
     normalizeBoltSpec,
   };
 });

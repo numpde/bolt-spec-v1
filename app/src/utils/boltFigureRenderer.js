@@ -27,9 +27,16 @@
     .figure-dim { stroke: #7f4e31; stroke-width: 0.85; fill: none; }
     .figure-text { fill: #7f4e31; font-family: "DejaVu Sans Mono", monospace; font-size: 11px; pointer-events: none; user-select: none; }
     .figure-caption { fill: #445960; font-family: "DejaVu Sans Mono", monospace; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; }
-    .figure-hit-zone { fill: transparent; stroke: transparent; stroke-width: 0; rx: 5; cursor: ns-resize; }
-    .figure-hit-zone:hover { fill: transparent; stroke: transparent; }
+    .figure-wheel-zone { fill: transparent; stroke: transparent; stroke-width: 0; rx: 5; cursor: ns-resize; pointer-events: all; }
+    .figure-wheel-zone:hover { fill: transparent; stroke: transparent; }
   `;
+
+  const EXCLUDED_DRAG_HOTSPOT_KEYS = new Set([
+    "underHeadLengthMm:start",
+    "headHeightMm:end",
+    "socketDepthMm:start",
+    "threadedLengthMm:end",
+  ]);
 
   const buildSideOutlinePoints = (spec) => {
     const headEndX = spec.headHeightMm;
@@ -313,7 +320,7 @@
     ].join("");
   };
 
-  const renderDimensionHitZone = (dimension) => {
+  const renderDimensionWheelZone = (dimension) => {
     if (!dimension.fieldName) {
       return "";
     }
@@ -343,8 +350,74 @@
     const x = textCenterX - width / 2;
     const y = textCenterY - height / 2;
 
-    return `<rect class="figure-hit-zone" data-field-name="${dimension.fieldName}" x="${x}" y="${y}" width="${width}" height="${height}" />`;
+    return `<rect class="figure-wheel-zone" data-field-name="${dimension.fieldName}" x="${x}" y="${y}" width="${width}" height="${height}" />`;
   };
+
+  const buildDimensionDragRects = (dimension) => {
+    if (!dimension.fieldName) {
+      return [];
+    }
+
+    if (dimension.axis === "vertical") {
+      const width = 44;
+      const height = 34;
+
+      return [
+        {
+          key: `${dimension.fieldName}:start`,
+          fieldName: dimension.fieldName,
+          axis: "vertical",
+          directionFactor: -1,
+          x: dimension.x1 - width / 2,
+          y: dimension.y1 - height / 2,
+          width,
+          height,
+        },
+        {
+          key: `${dimension.fieldName}:end`,
+          fieldName: dimension.fieldName,
+          axis: "vertical",
+          directionFactor: 1,
+          x: dimension.x2 - width / 2,
+          y: dimension.y2 - height / 2,
+          width,
+          height,
+        },
+      ];
+    }
+
+    const width = 34;
+    const height = 44;
+
+    return [
+      {
+        key: `${dimension.fieldName}:start`,
+        fieldName: dimension.fieldName,
+        axis: "horizontal",
+        directionFactor: -1,
+        x: dimension.x1 - width / 2,
+        y: dimension.y1 - height / 2,
+        width,
+        height,
+      },
+      {
+        key: `${dimension.fieldName}:end`,
+        fieldName: dimension.fieldName,
+        axis: "horizontal",
+        directionFactor: 1,
+        x: dimension.x2 - width / 2,
+        y: dimension.y2 - height / 2,
+        width,
+        height,
+      },
+    ];
+  };
+
+  const buildDragHotspots = (scene) => (
+    scene.dimensions
+      .flatMap((dimension) => buildDimensionDragRects(dimension))
+      .filter((rect) => !EXCLUDED_DRAG_HOTSPOT_KEYS.has(rect.key))
+  );
 
   const renderBoltFigureSvg = (inputSpec, options = {}) => {
     const scene = buildBoltFigureScene(inputSpec, options);
@@ -383,7 +456,7 @@
       dimensions.map((dimension) => [
         `<line class="figure-dim" x1="${dimension.x1}" y1="${dimension.y1}" x2="${dimension.x2}" y2="${dimension.y2}" />`,
         renderDimensionCaps(dimension),
-        renderDimensionHitZone(dimension),
+        renderDimensionWheelZone(dimension),
         `<text class="figure-text" text-anchor="${dimension.textAnchor}" font-family="DejaVu Sans Mono, monospace" font-size="11" fill="#7f4e31" x="${dimension.textX}" y="${dimension.textY}">${escapeXml(dimension.label)}</text>`,
       ].join("")).join(""),
       showTopView
@@ -401,6 +474,7 @@
 
   return {
     buildBoltFigureScene,
+    buildDragHotspots,
     renderBoltFigureSvg,
   };
 });

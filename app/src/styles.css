@@ -277,12 +277,59 @@ h2 {
 }
 
 .figure-wrap {
+  position: relative;
   border-radius: 18px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.75), rgba(232, 224, 209, 0.65)),
     rgba(255, 255, 255, 0.2);
   border: 1px solid rgba(255, 255, 255, 0.65);
   overflow: hidden;
+}
+
+.figure-svg-layer {
+  position: relative;
+  z-index: 0;
+}
+
+.figure-interaction-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.figure-drag-hotspot {
+  position: absolute;
+  border-radius: 999px;
+  background:
+    radial-gradient(
+      ellipse at center,
+      rgba(72, 126, 214, 0.28) 0%,
+      rgba(72, 126, 214, 0.18) 28%,
+      rgba(72, 126, 214, 0.08) 56%,
+      rgba(72, 126, 214, 0.02) 78%,
+      rgba(72, 126, 214, 0) 100%
+    );
+  box-shadow:
+    0 1px 2px rgba(34, 44, 62, 0.04);
+  pointer-events: auto;
+  touch-action: none;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    filter 120ms ease;
+}
+
+.figure-drag-hotspot:hover {
+  filter: saturate(1.08);
+  box-shadow:
+    0 2px 5px rgba(34, 44, 62, 0.06);
+}
+
+.figure-drag-hotspot:active {
+  transform: scale(0.985);
+  box-shadow:
+    0 1px 3px rgba(34, 44, 62, 0.05);
 }
 
 .figure-svg {
