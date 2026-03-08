@@ -1,0 +1,406 @@
+(function(root, factory) {
+  const svgApi = typeof module === "object" && module.exports
+    ? require("./boltSvg.js")
+    : root;
+  const modelApi = typeof module === "object" && module.exports
+    ? require("./boltModel.js")
+    : root;
+  const api = factory(svgApi, modelApi);
+
+  if (typeof module === "object" && module.exports) {
+    module.exports = api;
+  }
+
+  if (root) {
+    Object.assign(root, api);
+  }
+})(typeof globalThis !== "undefined" ? globalThis : this, function(svgApi, modelApi) {
+  const { pointsToPath, buildTorxPath, escapeXml } = svgApi;
+  const { normalizeBoltSpec } = modelApi;
+
+  const FIGURE_SVG_STYLE = `
+    .figure-svg { display: block; width: 100%; height: auto; }
+    .figure-line { stroke: #1e2a2f; stroke-width: 1.3; fill: rgba(255, 255, 255, 0.12); }
+    .figure-thread { stroke: #415057; stroke-width: 0.8; }
+    .figure-hidden { stroke: #6b777c; stroke-width: 0.95; stroke-dasharray: 4 4; fill: none; }
+    .figure-centerline { stroke: rgba(68, 89, 96, 0.28); stroke-width: 0.8; stroke-dasharray: 10 6 2 6; }
+    .figure-dim { stroke: #7f4e31; stroke-width: 0.85; fill: none; }
+    .figure-text { fill: #7f4e31; font-family: "DejaVu Sans Mono", monospace; font-size: 11px; pointer-events: none; user-select: none; }
+    .figure-caption { fill: #445960; font-family: "DejaVu Sans Mono", monospace; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; }
+    .figure-hit-zone { fill: transparent; stroke: transparent; stroke-width: 0; rx: 5; cursor: ns-resize; }
+    .figure-hit-zone:hover { fill: transparent; stroke: transparent; }
+  `;
+
+  const buildSideOutlinePoints = (spec) => {
+    const headEndX = spec.headHeightMm;
+    const tipStartX = headEndX + spec.underHeadLengthMm - spec.tipChamferMm;
+    const tipX = headEndX + spec.underHeadLengthMm;
+
+    return [
+      { x: 0, y: -spec.headRadiusMm },
+      { x: headEndX, y: -spec.headRadiusMm },
+      { x: headEndX, y: -spec.shankRadiusMm },
+      { x: tipStartX, y: -spec.shankRadiusMm },
+      { x: tipX, y: -spec.tipFlatRadiusMm },
+      { x: tipX, y: spec.tipFlatRadiusMm },
+      { x: tipStartX, y: spec.shankRadiusMm },
+      { x: headEndX, y: spec.shankRadiusMm },
+      { x: headEndX, y: spec.headRadiusMm },
+      { x: 0, y: spec.headRadiusMm },
+    ];
+  };
+
+  const buildThreadLines = (spec) => {
+    const headEndX = spec.headHeightMm;
+    const startX = headEndX + spec.threadStartMm;
+    const endX = headEndX + spec.underHeadLengthMm;
+    const topLines = [];
+    const bottomLines = [];
+
+    for (let x = startX; x < endX - 0.12; x += spec.pitchMm) {
+      const nextX = Math.min(x + spec.pitchMm * 0.72, endX);
+      topLines.push({
+        x1: x,
+        y1: -spec.shankRadiusMm,
+        x2: nextX,
+        y2: -spec.threadRootRadiusMm,
+      });
+      bottomLines.push({
+        x1: x,
+        y1: spec.shankRadiusMm,
+        x2: nextX,
+        y2: spec.threadRootRadiusMm,
+      });
+    }
+
+    return { topLines, bottomLines };
+  };
+
+  const buildDimension = ({
+    x1,
+    y1,
+    x2,
+    y2,
+    label,
+    fieldName = null,
+    textX = null,
+    textY = null,
+    textAnchor = "middle",
+    axis = null,
+    side = null,
+  }) => ({
+    x1,
+    y1,
+    x2,
+    y2,
+    label,
+    fieldName,
+    textX,
+    textY,
+    textAnchor,
+    axis,
+    side,
+  });
+
+  const buildBoltFigureScene = (inputSpec, options = {}) => {
+    const spec = normalizeBoltSpec(inputSpec);
+    const showTopView = options.showTopView !== false;
+    const scale = 18;
+    const leftGutter = 82;
+    const rightGutter = 88;
+    const topGutter = 76;
+    const bottomGutter = 36;
+    const outerLeftMargin = 40;
+    const viewSeparation = 25;
+    const sideWidth = spec.headHeightMm + spec.underHeadLengthMm;
+    const topDiameter = spec.headDiameterMm;
+    const sideWidthPx = sideWidth * scale;
+    const headRadiusPx = spec.headRadiusMm * scale;
+    const topCircleRadiusPx = (topDiameter * scale) / 2;
+    const sideTopY = topGutter;
+    const sideCenterY = sideTopY + headRadiusPx;
+    const sideBottomY = sideTopY + headRadiusPx * 2;
+    const centerX = outerLeftMargin + topCircleRadiusPx;
+    const topCenterY = sideCenterY;
+    const topViewRightX = centerX + topCircleRadiusPx;
+    const partLeftX = showTopView
+      ? topViewRightX + viewSeparation + leftGutter
+      : rightGutter;
+    const partRightX = partLeftX + sideWidthPx;
+    const viewWidth = partRightX + rightGutter;
+    const bottomDimensionLineY = sideBottomY + 24;
+    const lowerTextY = bottomDimensionLineY + 12;
+    const topViewBottomY = topCenterY + topCircleRadiusPx + 26;
+    const viewHeight = showTopView
+      ? Math.max(lowerTextY + bottomGutter, topViewBottomY + bottomGutter)
+      : lowerTextY + bottomGutter;
+
+    const mmToPxX = (value) => partLeftX + value * scale;
+    const mmToPxYSide = (value) => sideCenterY + value * scale;
+
+    const sideOutlinePath = pointsToPath(
+      buildSideOutlinePoints(spec).map((point) => ({
+        x: mmToPxX(point.x),
+        y: mmToPxYSide(point.y),
+      }))
+    );
+
+    const threadLines = buildThreadLines(spec);
+    const socketDepthX = mmToPxX(Math.min(spec.socketDepthVisibleMm, spec.headHeightMm));
+    const socketHalfHeightPx = spec.socketOuterRadiusMm * scale;
+    const shankStartPx = mmToPxX(spec.headHeightMm);
+    const tipPx = mmToPxX(spec.headHeightMm + spec.underHeadLengthMm);
+    const torxPath = buildTorxPath(
+      centerX,
+      topCenterY,
+      spec.socketOuterRadiusMm * scale,
+      spec.socketInnerRadiusMm * scale
+    );
+    const topDimensionLineY = sideTopY - 28;
+    const dimensionTextGapPx = 12;
+    const dimensionTextBaselineNudgePx = 4;
+    const placeDimensionText = (dimension) => {
+      if (dimension.axis === "vertical") {
+        if (dimension.side === "left") {
+          return {
+            ...dimension,
+            textX: dimension.x1 - dimensionTextGapPx,
+            textY: (dimension.y1 + dimension.y2) / 2 + dimensionTextBaselineNudgePx,
+            textAnchor: "end",
+          };
+        }
+
+        return {
+          ...dimension,
+          textX: dimension.x1 + dimensionTextGapPx,
+          textY: (dimension.y1 + dimension.y2) / 2 + dimensionTextBaselineNudgePx,
+          textAnchor: "start",
+        };
+      }
+
+      if (dimension.side === "bottom") {
+        return {
+          ...dimension,
+          textX: (dimension.x1 + dimension.x2) / 2,
+          textY: dimension.y1 + dimensionTextGapPx,
+          textAnchor: "middle",
+        };
+      }
+
+      return {
+        ...dimension,
+        textX: (dimension.x1 + dimension.x2) / 2,
+        textY: dimension.y1 - 6,
+        textAnchor: "middle",
+      };
+    };
+
+    return {
+      spec,
+      viewWidth,
+      viewHeight,
+      showTopView,
+      centerX,
+      sideCenterY,
+      sideTopY,
+      sideBottomY,
+      topCenterY,
+      partLeftX,
+      partRightX,
+      topCircleRadiusPx,
+      sideOutlinePath,
+      torxPath,
+      socketDepthX,
+      socketHalfHeightPx,
+      shankStartPx,
+      tipPx,
+      threadLines: {
+        top: threadLines.topLines.map((line) => ({
+          x1: mmToPxX(line.x1),
+          y1: mmToPxYSide(line.y1),
+          x2: mmToPxX(line.x2),
+          y2: mmToPxYSide(line.y2),
+        })),
+        bottom: threadLines.bottomLines.map((line) => ({
+          x1: mmToPxX(line.x1),
+          y1: mmToPxYSide(line.y1),
+          x2: mmToPxX(line.x2),
+          y2: mmToPxYSide(line.y2),
+        })),
+      },
+      dimensions: [
+        placeDimensionText(buildDimension({
+          x1: shankStartPx,
+          y1: topDimensionLineY,
+          x2: tipPx,
+          y2: topDimensionLineY,
+          label: `${spec.underHeadLengthMm.toFixed(1)}`,
+          fieldName: "underHeadLengthMm",
+          axis: "horizontal",
+          side: "top",
+        })),
+        placeDimensionText(buildDimension({
+          x1: partLeftX,
+          y1: topDimensionLineY,
+          x2: shankStartPx,
+          y2: topDimensionLineY,
+          label: `${spec.headHeightMm.toFixed(1)}`,
+          fieldName: "headHeightMm",
+          axis: "horizontal",
+          side: "top",
+        })),
+        placeDimensionText(buildDimension({
+          x1: partLeftX - 26,
+          y1: sideTopY,
+          x2: partLeftX - 26,
+          y2: sideBottomY,
+          label: `D ${spec.headDiameterMm.toFixed(1)}`,
+          fieldName: "headDiameterMm",
+          axis: "vertical",
+          side: "left",
+        })),
+        placeDimensionText(buildDimension({
+          x1: partRightX + 26,
+          y1: mmToPxYSide(-spec.shankRadiusMm),
+          x2: partRightX + 26,
+          y2: mmToPxYSide(spec.shankRadiusMm),
+          label: `d ${spec.nominalDiameterMm.toFixed(1)}`,
+          fieldName: "nominalDiameterMm",
+          axis: "vertical",
+          side: "right",
+        })),
+        placeDimensionText(buildDimension({
+          x1: partLeftX,
+          y1: bottomDimensionLineY,
+          x2: socketDepthX,
+          y2: bottomDimensionLineY,
+          label: `${spec.socketDepthMm.toFixed(1)}`,
+          fieldName: "socketDepthMm",
+          axis: "horizontal",
+          side: "bottom",
+        })),
+        placeDimensionText(buildDimension({
+          x1: mmToPxX(spec.headHeightMm + spec.threadStartMm),
+          y1: bottomDimensionLineY,
+          x2: tipPx,
+          y2: bottomDimensionLineY,
+          label: `${spec.threadedLengthMm.toFixed(1)}`,
+          fieldName: "threadedLengthMm",
+          axis: "horizontal",
+          side: "bottom",
+        })),
+      ],
+    };
+  };
+
+  const renderLine = (className, line) => (
+    `<line class="${className}" x1="${line.x1}" y1="${line.y1}" x2="${line.x2}" y2="${line.y2}" />`
+  );
+
+  const renderDimensionCaps = (dimension) => {
+    const capHalf = 6;
+
+    if (dimension.axis === "vertical") {
+      return [
+        `<line class="figure-dim" x1="${dimension.x1 - capHalf}" y1="${dimension.y1}" x2="${dimension.x1 + capHalf}" y2="${dimension.y1}" />`,
+        `<line class="figure-dim" x1="${dimension.x2 - capHalf}" y1="${dimension.y2}" x2="${dimension.x2 + capHalf}" y2="${dimension.y2}" />`,
+      ].join("");
+    }
+
+    return [
+      `<line class="figure-dim" x1="${dimension.x1}" y1="${dimension.y1 - capHalf}" x2="${dimension.x1}" y2="${dimension.y1 + capHalf}" />`,
+      `<line class="figure-dim" x1="${dimension.x2}" y1="${dimension.y2 - capHalf}" x2="${dimension.x2}" y2="${dimension.y2 + capHalf}" />`,
+    ].join("");
+  };
+
+  const renderDimensionHitZone = (dimension) => {
+    if (!dimension.fieldName) {
+      return "";
+    }
+
+    const fontSize = 11;
+    const ascent = fontSize * 0.78;
+    const descent = fontSize * 0.22;
+    const charWidth = 7.1;
+    const zoneScale = 1.5;
+    const zoneHeightScale = 1.5;
+    const isVertical = dimension.axis === "vertical";
+    const paddingX = isVertical ? 12 : 10;
+    const textWidth = dimension.label.length * charWidth;
+    const textCenterX = dimension.textAnchor === "start"
+      ? dimension.textX + textWidth / 2
+      : dimension.textAnchor === "end"
+        ? dimension.textX - textWidth / 2
+        : dimension.textX;
+    const textCenterY = dimension.textY - (ascent - descent) / 2;
+    const baseWidth = Math.max(
+      textWidth + paddingX * 2,
+      isVertical ? 60 : 52
+    );
+    const baseHeight = isVertical ? 30 : 24;
+    const width = baseWidth * zoneScale;
+    const height = baseHeight * zoneScale * zoneHeightScale;
+    const x = textCenterX - width / 2;
+    const y = textCenterY - height / 2;
+
+    return `<rect class="figure-hit-zone" data-field-name="${dimension.fieldName}" x="${x}" y="${y}" width="${width}" height="${height}" />`;
+  };
+
+  const renderBoltFigureSvg = (inputSpec, options = {}) => {
+    const scene = buildBoltFigureScene(inputSpec, options);
+    const {
+      spec,
+      viewWidth,
+      viewHeight,
+      showTopView,
+      centerX,
+      sideCenterY,
+      sideTopY,
+      sideBottomY,
+      topCenterY,
+      topCircleRadiusPx,
+      partLeftX,
+      partRightX,
+      sideOutlinePath,
+      torxPath,
+      socketDepthX,
+      socketHalfHeightPx,
+      threadLines,
+      dimensions,
+    } = scene;
+
+    return [
+      `<svg class="figure-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewWidth} ${viewHeight}" role="img" aria-label="${showTopView ? "Live bolt side and top views" : "Live bolt side view"}">`,
+      `<style>${FIGURE_SVG_STYLE}</style>`,
+      `<rect x="0" y="0" width="${viewWidth}" height="${viewHeight}" fill="#f7f1e8" />`,
+      `<line class="figure-centerline" x1="${showTopView ? centerX - topCircleRadiusPx - 18 : partLeftX - 18}" y1="${sideCenterY}" x2="${partRightX + 18}" y2="${sideCenterY}" />`,
+      `<path class="figure-line" d="${sideOutlinePath}" />`,
+      threadLines.top.map((line) => renderLine("figure-thread", line)).join(""),
+      threadLines.bottom.map((line) => renderLine("figure-thread", line)).join(""),
+      `<line class="figure-hidden" x1="${partLeftX}" y1="${sideCenterY - socketHalfHeightPx}" x2="${socketDepthX}" y2="${sideCenterY - socketHalfHeightPx}" />`,
+      `<line class="figure-hidden" x1="${partLeftX}" y1="${sideCenterY + socketHalfHeightPx}" x2="${socketDepthX}" y2="${sideCenterY + socketHalfHeightPx}" />`,
+      `<line class="figure-hidden" x1="${socketDepthX}" y1="${sideCenterY - socketHalfHeightPx}" x2="${socketDepthX}" y2="${sideCenterY + socketHalfHeightPx}" />`,
+      dimensions.map((dimension) => [
+        `<line class="figure-dim" x1="${dimension.x1}" y1="${dimension.y1}" x2="${dimension.x2}" y2="${dimension.y2}" />`,
+        renderDimensionCaps(dimension),
+        renderDimensionHitZone(dimension),
+        `<text class="figure-text" text-anchor="${dimension.textAnchor}" font-family="DejaVu Sans Mono, monospace" font-size="11" fill="#7f4e31" x="${dimension.textX}" y="${dimension.textY}">${escapeXml(dimension.label)}</text>`,
+      ].join("")).join(""),
+      showTopView
+        ? `<circle class="figure-line" cx="${centerX}" cy="${topCenterY}" r="${topCircleRadiusPx}" />`
+        : "",
+      showTopView
+        ? `<path class="figure-line" d="${torxPath}" />`
+        : "",
+      showTopView
+        ? `<text class="figure-text" text-anchor="middle" font-family="DejaVu Sans Mono, monospace" font-size="11" fill="#7f4e31" x="${centerX}" y="${topCenterY + topCircleRadiusPx + 26}">${escapeXml(spec.driveLabel)}</text>`
+        : "",
+      `</svg>`,
+    ].join("");
+  };
+
+  return {
+    buildBoltFigureScene,
+    renderBoltFigureSvg,
+  };
+});

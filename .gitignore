@@ -24,3 +24,5 @@ Thumbs.db
 
 # Generated project artifacts
 exports/
+app/preview/
+node_modules/
