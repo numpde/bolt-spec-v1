@@ -26,6 +26,10 @@
     axis === "vertical" ? event.clientY : event.clientX
   );
 
+  const getHotspotByKey = (hotspots, hotspotKey) => (
+    hotspots.find((hotspot) => hotspot.key === hotspotKey) || null
+  );
+
   const getHotspotCenterInScene = (hotspot, axis) => (
     axis === "vertical"
       ? hotspot.y + hotspot.height / 2
@@ -39,6 +43,20 @@
   );
 
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+  const roundToStep = (value, stepSize, min, max) => {
+    if (!Number.isFinite(stepSize) || stepSize <= 0) {
+      return clamp(value, min, max);
+    }
+
+    const anchor = Number.isFinite(min) ? min : 0;
+    const decimals = String(stepSize).includes(".")
+      ? String(stepSize).split(".")[1].length
+      : 0;
+    const stepCount = Math.round((value - anchor) / stepSize);
+    const rounded = anchor + stepCount * stepSize;
+
+    return clamp(Number(rounded.toFixed(decimals)), min, max);
+  };
 
   const getFieldBounds = (spec, fieldName) => {
     const field = FIELD_CONFIG_MAP[fieldName];
@@ -179,10 +197,16 @@
           fieldName: pending.fieldName,
           axis: pending.axis,
           directionFactor: pending.directionFactor,
+          stepSize: pending.stepSize,
           pixelsPerStep: pending.pixelsPerStep,
           currentValue: pending.currentValue,
-          lastPointerPositionPx: pending.lastPointerPositionPx,
-          residualAxisDeltaPx: 0,
+          startValue: pending.startValue,
+          startPointerPositionPx: pending.startPointerPositionPx,
+          pointerOffsetPx: pending.pointerOffsetPx,
+          minValue: pending.minValue,
+          maxValue: pending.maxValue,
+          minCenterScreen: pending.minCenterScreen,
+          maxCenterScreen: pending.maxCenterScreen,
         };
         dragPendingRef.current = null;
       };
@@ -251,21 +275,68 @@
         }
 
         const hotspotKey = dragZone.getAttribute("data-hotspot-key");
+        const fieldName = dragZone.getAttribute("data-field-name");
         const axis = dragZone.getAttribute("data-axis") || "horizontal";
+        const stepSize = FIELD_STEP_MAP[fieldName] || 1;
+        const bounds = getFieldBounds(specRef.current, fieldName);
+        const currentScene = sceneRef.current;
+        const currentHotspot = getHotspotByKey(dragHotspotsRef.current, hotspotKey);
+        const containerRect = container.getBoundingClientRect();
+        const currentCenterScreen = currentHotspot && currentScene
+          ? projectScenePositionToScreen(
+            getHotspotCenterInScene(currentHotspot, axis),
+            axis,
+            currentScene,
+            containerRect
+          )
+          : axisPosition(event, axis);
+        const centerForValue = (targetValue) => {
+          const nextSpec = normalizeBoltSpec({
+            ...specRef.current,
+            [fieldName]: targetValue,
+          });
+          const nextScene = buildBoltFigureScene(nextSpec, {
+            showTopView: showTopViewRef.current,
+          });
+          const nextHotspot = getHotspotByKey(
+            buildDragHotspots(nextScene),
+            hotspotKey
+          );
+
+          if (!nextHotspot) {
+            return currentCenterScreen;
+          }
+
+          return projectScenePositionToScreen(
+            getHotspotCenterInScene(nextHotspot, axis),
+            axis,
+            nextScene,
+            containerRect
+          );
+        };
+        const minCenterScreen = centerForValue(bounds.min);
+        const maxCenterScreen = centerForValue(bounds.max);
 
         dragPendingRef.current = {
           pointerId: event.pointerId,
           hotspotKey,
-          fieldName: dragZone.getAttribute("data-field-name"),
+          fieldName,
           axis,
           directionFactor: Number(dragZone.getAttribute("data-direction-factor") || "1"),
+          stepSize,
           pixelsPerStep: estimateDragPixelsPerStep(
             hotspotKey,
-            dragZone.getAttribute("data-field-name"),
+            fieldName,
             axis
           ),
-          currentValue: Number(specRef.current[dragZone.getAttribute("data-field-name")]),
-          lastPointerPositionPx: axisPosition(event, axis),
+          currentValue: Number(specRef.current[fieldName]),
+          startValue: Number(specRef.current[fieldName]),
+          startPointerPositionPx: axisPosition(event, axis),
+          pointerOffsetPx: axisPosition(event, axis) - currentCenterScreen,
+          minValue: bounds.min,
+          maxValue: bounds.max,
+          minCenterScreen,
+          maxCenterScreen,
           timerId: holdMs > 0
             ? window.setTimeout(() => {
               activatePendingDrag();
@@ -286,36 +357,54 @@
         }
 
         const pointerPositionPx = axisPosition(event, gesture.axis);
-        const pointerAxisDeltaPx = pointerPositionPx - gesture.lastPointerPositionPx;
-        gesture.lastPointerPositionPx = pointerPositionPx;
-        gesture.residualAxisDeltaPx += pointerAxisDeltaPx;
+        const hasMovableInterval = Math.abs(
+          gesture.maxCenterScreen - gesture.minCenterScreen
+        ) > 0.5;
+        let desiredValue;
 
-        const signedAxisDelta = (
-          gesture.residualAxisDeltaPx * gesture.directionFactor
-        );
-        const stepSize = FIELD_STEP_MAP[gesture.fieldName] || 1;
-        const rawStepDelta = quantizeStepCount(signedAxisDelta, gesture.pixelsPerStep);
-        const bounds = getFieldBounds(specRef.current, gesture.fieldName);
-        const minStepDelta = Math.ceil((bounds.min - gesture.currentValue) / stepSize);
-        const maxStepDelta = Math.floor((bounds.max - gesture.currentValue) / stepSize);
-        const stepDelta = clamp(
-          rawStepDelta,
-          Number.isFinite(minStepDelta) ? minStepDelta : rawStepDelta,
-          Number.isFinite(maxStepDelta) ? maxStepDelta : rawStepDelta
-        );
-
-        if (stepDelta !== rawStepDelta) {
-          gesture.residualAxisDeltaPx = 0;
+        if (hasMovableInterval) {
+          const desiredCenterScreen = pointerPositionPx - gesture.pointerOffsetPx;
+          const lowCenter = Math.min(gesture.minCenterScreen, gesture.maxCenterScreen);
+          const highCenter = Math.max(gesture.minCenterScreen, gesture.maxCenterScreen);
+          const clampedCenter = clamp(desiredCenterScreen, lowCenter, highCenter);
+          const centerRatio = (
+            clampedCenter - gesture.minCenterScreen
+          ) / (
+            gesture.maxCenterScreen - gesture.minCenterScreen
+          );
+          const rawValue = gesture.minValue + centerRatio * (
+            gesture.maxValue - gesture.minValue
+          );
+          desiredValue = roundToStep(
+            rawValue,
+            gesture.stepSize,
+            gesture.minValue,
+            gesture.maxValue
+          );
+        } else {
+          const pointerAxisDeltaPx = pointerPositionPx - gesture.startPointerPositionPx;
+          const signedAxisDelta = pointerAxisDeltaPx * gesture.directionFactor;
+          const desiredStepDelta = quantizeStepCount(
+            signedAxisDelta,
+            gesture.pixelsPerStep
+          );
+          desiredValue = roundToStep(
+            gesture.startValue + desiredStepDelta * gesture.stepSize,
+            gesture.stepSize,
+            gesture.minValue,
+            gesture.maxValue
+          );
         }
+
+        const stepDelta = Math.round(
+          (desiredValue - gesture.currentValue) / gesture.stepSize
+        );
 
         if (stepDelta === 0) {
           return;
         }
 
-        gesture.currentValue += stepDelta * stepSize;
-        gesture.residualAxisDeltaPx -= (
-          stepDelta * gesture.directionFactor * gesture.pixelsPerStep
-        );
+        gesture.currentValue = desiredValue;
         handlersRef.current.onStepAdjustField?.(gesture.fieldName, stepDelta);
       };
 
