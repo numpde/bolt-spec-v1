@@ -4,15 +4,53 @@
     normalizeBoltSpec,
     getThreadedLengthMaxMm,
     BOLT_FIELDS,
+    DEFAULT_PRESET_KEY,
+    normalizeCheckpointState,
+    buildCheckpointUrl,
+    parseCheckpointFromLocation,
+    buildCheckpointHistoryState,
+    extractCheckpointFromHistoryState,
   } = window;
-  const { PresetPicker, ParameterPanel, BoltFigure, SpecSummary } = window;
+  const {
+    CheckpointCard,
+    PresetPicker,
+    ParameterPanel,
+    BoltFigure,
+    SpecSummary,
+  } = window;
   const EDITABLE_FIELD_NAMES = BOLT_FIELDS.map((field) => field.name);
+  const fieldMap = Object.fromEntries(BOLT_FIELDS.map((field) => [field.name, field]));
+
+  const getDefaultAppState = () => normalizeCheckpointState({
+    presetName: DEFAULT_PRESET_KEY,
+    draftSpec: cloneBoltPreset(DEFAULT_PRESET_KEY),
+    showTopView: true,
+  });
+
+  const getInitialAppState = () => {
+    if (typeof window === "undefined") {
+      return getDefaultAppState();
+    }
+
+    return (
+      extractCheckpointFromHistoryState(window.history.state) ||
+      parseCheckpointFromLocation(window.location) ||
+      getDefaultAppState()
+    );
+  };
 
   const App = () => {
-    const [presetName, setPresetName] = React.useState("m5");
-    const [draftSpec, setDraftSpec] = React.useState(cloneBoltPreset("m5"));
-    const [showTopView, setShowTopView] = React.useState(true);
-    const fieldMap = Object.fromEntries(BOLT_FIELDS.map((field) => [field.name, field]));
+    const initialAppState = React.useMemo(() => getInitialAppState(), []);
+    const hasInitialCheckpoint = React.useMemo(() => (
+      Boolean(
+        extractCheckpointFromHistoryState(window.history.state) ||
+        parseCheckpointFromLocation(window.location)
+      )
+    ), []);
+
+    const [presetName, setPresetName] = React.useState(initialAppState.presetName);
+    const [draftSpec, setDraftSpec] = React.useState(initialAppState.draftSpec);
+    const [showTopView, setShowTopView] = React.useState(initialAppState.showTopView);
 
     const getFieldBounds = (draftLikeSpec, fieldName) => {
       const field = fieldMap[fieldName];
@@ -44,21 +82,91 @@
       return { min, max };
     };
 
-    const coerceDraftSpec = (nextDraftSpec) => {
-      const normalizedSpec = normalizeBoltSpec(nextDraftSpec);
-      const coercedEditableSpec = Object.fromEntries(
-        EDITABLE_FIELD_NAMES.map((fieldName) => [fieldName, normalizedSpec[fieldName]])
-      );
+    const coerceDraftSpec = (nextDraftSpec, nextPresetName = presetName) => {
+      const checkpointState = normalizeCheckpointState({
+        presetName: nextPresetName,
+        draftSpec: nextDraftSpec,
+        showTopView,
+      });
 
-      return {
-        ...nextDraftSpec,
-        ...coercedEditableSpec,
-      };
+      return checkpointState.draftSpec;
     };
 
+    const buildCurrentAppState = React.useCallback((overrides = {}) => (
+      normalizeCheckpointState({
+        presetName,
+        draftSpec,
+        showTopView,
+        ...overrides,
+      })
+    ), [draftSpec, presetName, showTopView]);
+
+    const applyAppState = React.useCallback((nextAppState) => {
+      setPresetName(nextAppState.presetName);
+      setDraftSpec(nextAppState.draftSpec);
+      setShowTopView(nextAppState.showTopView);
+    }, []);
+
+    const commitCheckpointToHistory = React.useCallback((mode, checkpointLike) => {
+      const checkpointState = normalizeCheckpointState(checkpointLike);
+      const nextUrl = buildCheckpointUrl(checkpointState, window.location);
+      const currentUrl = `${window.location.pathname}${window.location.search}`;
+      const resolvedMode = mode === "push" && nextUrl === currentUrl
+        ? "replace"
+        : mode;
+      const historyState = buildCheckpointHistoryState(checkpointState);
+
+      if (resolvedMode === "push") {
+        window.history.pushState(historyState, "", nextUrl);
+      } else {
+        window.history.replaceState(historyState, "", nextUrl);
+      }
+
+      return checkpointState;
+    }, []);
+
+    React.useEffect(() => {
+      if (!hasInitialCheckpoint) {
+        return;
+      }
+
+      commitCheckpointToHistory("replace", initialAppState);
+    }, [commitCheckpointToHistory, hasInitialCheckpoint, initialAppState]);
+
+    React.useEffect(() => {
+      const handlePopState = (event) => {
+        const nextCheckpoint = (
+          extractCheckpointFromHistoryState(event.state) ||
+          parseCheckpointFromLocation(window.location) ||
+          getDefaultAppState()
+        );
+
+        applyAppState(nextCheckpoint);
+      };
+
+      window.addEventListener("popstate", handlePopState);
+
+      return () => {
+        window.removeEventListener("popstate", handlePopState);
+      };
+    }, [applyAppState]);
+
     const handlePresetSelect = (nextPresetName) => {
-      setPresetName(nextPresetName);
-      setDraftSpec(coerceDraftSpec(cloneBoltPreset(nextPresetName)));
+      const currentCheckpoint = buildCurrentAppState();
+      commitCheckpointToHistory("replace", currentCheckpoint);
+
+      const nextCheckpoint = normalizeCheckpointState({
+        presetName: nextPresetName,
+        draftSpec: cloneBoltPreset(nextPresetName),
+        showTopView,
+      });
+
+      applyAppState(nextCheckpoint);
+      commitCheckpointToHistory("push", nextCheckpoint);
+    };
+
+    const handleCheckpoint = () => {
+      commitCheckpointToHistory("push", buildCurrentAppState());
     };
 
     const handleFieldChange = (fieldName, nextValue) => {
@@ -110,6 +218,10 @@
     };
 
     const spec = normalizeBoltSpec(draftSpec);
+    const checkpointHref = buildCheckpointUrl(
+      buildCurrentAppState(),
+      window.location
+    );
 
     return (
       <div className="app-shell">
@@ -147,6 +259,11 @@
           <PresetPicker
             selectedPreset={presetName}
             onSelect={handlePresetSelect}
+          />
+
+          <CheckpointCard
+            checkpointHref={checkpointHref}
+            onCheckpoint={handleCheckpoint}
           />
 
           <ParameterPanel

@@ -207,6 +207,42 @@ h2 {
   color: #f5f1ea;
 }
 
+.checkpoint-button {
+  width: 100%;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(30, 42, 47, 0.18);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(30, 42, 47, 0.94), rgba(63, 83, 89, 0.9));
+  color: #f7f1e8;
+  cursor: pointer;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    filter 160ms ease;
+}
+
+.checkpoint-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(30, 42, 47, 0.14);
+  filter: saturate(1.04);
+}
+
+.checkpoint-url {
+  display: block;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(30, 42, 47, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.48);
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .field-grid {
   display: grid;
   gap: 12px;
