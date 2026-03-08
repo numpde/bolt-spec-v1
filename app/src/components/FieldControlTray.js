@@ -24,20 +24,70 @@
       return null;
     }
 
+    const trayRef = React.useRef(null);
     const isNominalDiameterField = field.name === "nominalDiameterMm";
-    const handleWheelStep = (event) => {
-      if (!event.deltaY) {
-        return;
+
+    React.useEffect(() => {
+      const tray = trayRef.current;
+
+      if (!tray || isNominalDiameterField) {
+        return undefined;
       }
 
-      event.preventDefault();
-      event.stopPropagation();
-      lockGlobalWheelScroll();
-      onStepAdjust(event.deltaY < 0 ? 1 : -1);
-    };
+      const handleNativeWheel = (event) => {
+        const control = event.target.closest(
+          ".figure-control-value-pill, .figure-control-slider"
+        );
+
+        if (!control || !event.deltaY) {
+          return;
+        }
+
+        if (event.cancelable) {
+          event.preventDefault();
+        }
+
+        event.stopPropagation();
+
+        if (typeof event.stopImmediatePropagation === "function") {
+          event.stopImmediatePropagation();
+        }
+
+        lockGlobalWheelScroll();
+        onStepAdjust(event.deltaY < 0 ? 1 : -1);
+      };
+
+      tray.addEventListener("wheel", handleNativeWheel, {
+        passive: false,
+        capture: true,
+      });
+
+      return () => {
+        tray.removeEventListener("wheel", handleNativeWheel, {
+          capture: true,
+        });
+      };
+    }, [isNominalDiameterField, onStepAdjust]);
+
+    React.useEffect(() => {
+      const handleWindowKeyDown = (event) => {
+        if (event.key !== "Escape") {
+          return;
+        }
+
+        event.preventDefault();
+        onClose();
+      };
+
+      window.addEventListener("keydown", handleWindowKeyDown);
+
+      return () => {
+        window.removeEventListener("keydown", handleWindowKeyDown);
+      };
+    }, [onClose]);
 
     return (
-      <section className="figure-control-tray">
+      <section ref={trayRef} className="figure-control-tray">
         <div className="figure-control-tray-header">
           <div>
             <p className="eyebrow">Quick Adjust</p>
@@ -89,7 +139,6 @@
               </button>
               <div
                 className="figure-control-value-pill"
-                onWheel={handleWheelStep}
                 title="Mouse wheel to adjust"
               >
                 {Number(value).toFixed(1)} mm
@@ -109,7 +158,6 @@
               max={max}
               step={field.step}
               value={value}
-              onWheel={handleWheelStep}
               onChange={(event) => onSliderChange(Number(event.target.value))}
             />
             <div className="figure-control-bound-row">

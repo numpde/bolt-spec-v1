@@ -353,6 +353,7 @@
               onAdjustField={handleFieldWheelAdjust}
               onStepAdjustField={handleFieldStepAdjust}
               onSelectField={setActiveFieldName}
+              onDismissField={handleCloseActiveField}
               activeFieldName={activeFieldName}
               showTopView={showTopView}
             />

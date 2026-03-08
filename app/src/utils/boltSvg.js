@@ -25,8 +25,7 @@
     return pathParts.join(" ");
   };
 
-  const buildTorxPath = (centerX, centerY, outerRadius, innerRadius) => {
-    const pointCount = 96;
+  const buildTorxPath = (centerX, centerY, outerRadius, innerRadius, pointCount = 96) => {
     const points = [];
 
     for (let index = 0; index < pointCount; index += 1) {

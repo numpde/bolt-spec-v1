@@ -57,15 +57,17 @@
     ];
   };
 
-  const buildThreadLines = (spec) => {
+  const buildThreadLines = (spec, detailLevel = "full") => {
     const headEndX = spec.headHeightMm;
     const startX = headEndX + spec.threadStartMm;
     const endX = headEndX + spec.underHeadLengthMm;
     const topLines = [];
     const bottomLines = [];
+    const stepFactor = detailLevel === "fast" ? 2.8 : 1;
+    const segmentFactor = detailLevel === "fast" ? 1.08 : 0.72;
 
-    for (let x = startX; x < endX - 0.12; x += spec.pitchMm) {
-      const nextX = Math.min(x + spec.pitchMm * 0.72, endX);
+    for (let x = startX; x < endX - 0.12; x += spec.pitchMm * stepFactor) {
+      const nextX = Math.min(x + spec.pitchMm * segmentFactor, endX);
       topLines.push({
         x1: x,
         y1: -spec.shankRadiusMm,
@@ -112,6 +114,7 @@
   const buildBoltFigureScene = (inputSpec, options = {}) => {
     const spec = normalizeBoltSpec(inputSpec);
     const showTopView = options.showTopView !== false;
+    const detailLevel = options.detailLevel === "fast" ? "fast" : "full";
     const scale = 18;
     const leftGutter = 82;
     const rightGutter = 88;
@@ -152,7 +155,7 @@
       }))
     );
 
-    const threadLines = buildThreadLines(spec);
+    const threadLines = buildThreadLines(spec, detailLevel);
     const socketDepthX = mmToPxX(Math.min(spec.socketDepthVisibleMm, spec.headHeightMm));
     const socketHalfHeightPx = spec.socketOuterRadiusMm * scale;
     const shankStartPx = mmToPxX(spec.headHeightMm);
@@ -161,7 +164,8 @@
       centerX,
       topCenterY,
       spec.socketOuterRadiusMm * scale,
-      spec.socketInnerRadiusMm * scale
+      spec.socketInnerRadiusMm * scale,
+      detailLevel === "fast" ? 24 : 96
     );
     const topDimensionLineY = sideTopY - 28;
     const dimensionTextGapPx = 12;
@@ -204,6 +208,7 @@
 
     return {
       spec,
+      detailLevel,
       viewWidth,
       viewHeight,
       showTopView,
@@ -445,6 +450,7 @@
 
   const renderBoltFigureSvg = (inputSpec, options = {}) => {
     const scene = buildBoltFigureScene(inputSpec, options);
+    const includeWheelZones = options.includeWheelZones !== false;
     const {
       spec,
       viewWidth,
@@ -480,7 +486,7 @@
       dimensions.map((dimension) => [
         `<line class="figure-dim" x1="${dimension.x1}" y1="${dimension.y1}" x2="${dimension.x2}" y2="${dimension.y2}" />`,
         renderDimensionCaps(dimension),
-        renderDimensionWheelZone(dimension),
+        includeWheelZones ? renderDimensionWheelZone(dimension) : "",
         `<text class="figure-text" text-anchor="${dimension.textAnchor}" font-family="DejaVu Sans Mono, monospace" font-size="11" fill="#7f4e31" x="${dimension.textX}" y="${dimension.textY}">${escapeXml(dimension.label)}</text>`,
       ].join("")).join(""),
       showTopView

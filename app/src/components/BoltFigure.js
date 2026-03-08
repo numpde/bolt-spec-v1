@@ -18,6 +18,8 @@
   const DRAG_HOLD_MS = 180;
   const DRAG_DEBOUNCE_MS = 18;
   const VISUAL_IDLE_WINDOW_MS = 56;
+  const HIGH_CHURN_COOLDOWN_MS = 140;
+  const WHEEL_ACTIVE_COOLDOWN_MS = 220;
   const getGlobalWheelLockUntil = () => Number(globalThis.__BOLT_WHEEL_LOCK_UNTIL__ || 0);
   const lockGlobalWheelScroll = (ttlMs = WHEEL_LOCK_TTL_MS) => {
     globalThis.__BOLT_WHEEL_LOCK_UNTIL__ = Date.now() + ttlMs;
@@ -97,6 +99,7 @@
     onAdjustField,
     onStepAdjustField,
     onSelectField,
+    onDismissField,
     activeFieldName = null,
     showTopView = true,
   }) => {
@@ -106,6 +109,8 @@
     const dragGestureRef = React.useRef(null);
     const dragDebounceRef = React.useRef(null);
     const visualFrameRef = React.useRef(null);
+    const churnCooldownTimerRef = React.useRef(null);
+    const wheelActiveTimerRef = React.useRef(null);
     const lastVisualCommitMsRef = React.useRef(-Infinity);
     const latestVisualStateRef = React.useRef({
       spec,
@@ -121,20 +126,69 @@
       showTopView,
       activeFieldName,
     }));
+    const [renderDetailLevel, setRenderDetailLevel] = React.useState("full");
+    const [activeInteractionFocus, setActiveInteractionFocus] = React.useState(null);
+    const [activeDragHotspotKey, setActiveDragHotspotKey] = React.useState(null);
+    const [activeWheelFieldName, setActiveWheelFieldName] = React.useState(null);
 
     const scene = React.useMemo(
-      () => buildBoltFigureScene(visualState.spec, { showTopView: visualState.showTopView }),
-      [visualState.spec, visualState.showTopView]
+      () => buildBoltFigureScene(visualState.spec, {
+        showTopView: visualState.showTopView,
+        detailLevel: renderDetailLevel,
+      }),
+      [visualState.spec, visualState.showTopView, renderDetailLevel]
     );
     const dragHotspots = React.useMemo(() => buildDragHotspots(scene), [scene]);
     const wheelHotspots = React.useMemo(() => buildWheelHotspots(scene), [scene]);
+    const visibleDragHotspots = React.useMemo(() => {
+      if (activeDragHotspotKey) {
+        return dragHotspots.filter((hotspot) => hotspot.key === activeDragHotspotKey);
+      }
+
+      if (activeWheelFieldName) {
+        return [];
+      }
+
+      if (activeInteractionFocus?.type === "drag" && activeInteractionFocus.hotspotKey) {
+        return dragHotspots.filter((hotspot) => hotspot.key === activeInteractionFocus.hotspotKey);
+      }
+
+      if (visualState.activeFieldName) {
+        return dragHotspots.filter((hotspot) => hotspot.fieldName === visualState.activeFieldName);
+      }
+
+      return dragHotspots;
+    }, [activeDragHotspotKey, activeInteractionFocus, activeWheelFieldName, dragHotspots, visualState.activeFieldName]);
+    const visibleWheelHotspots = React.useMemo(() => {
+      if (activeDragHotspotKey) {
+        return [];
+      }
+
+      if (activeWheelFieldName) {
+        return wheelHotspots.filter((hotspot) => hotspot.fieldName === activeWheelFieldName);
+      }
+
+      if (activeInteractionFocus?.type === "drag") {
+        return [];
+      }
+
+      if (visualState.activeFieldName) {
+        return wheelHotspots.filter((hotspot) => hotspot.fieldName === visualState.activeFieldName);
+      }
+
+      return wheelHotspots;
+    }, [activeDragHotspotKey, activeInteractionFocus, activeWheelFieldName, visualState.activeFieldName, wheelHotspots]);
     const sceneRef = React.useRef(scene);
     const dragHotspotsRef = React.useRef(dragHotspots);
     const specRef = React.useRef(spec);
     const showTopViewRef = React.useRef(showTopView);
     const svgMarkup = React.useMemo(
-      () => renderBoltFigureSvg(visualState.spec, { showTopView: visualState.showTopView }),
-      [visualState.spec, visualState.showTopView]
+      () => renderBoltFigureSvg(visualState.spec, {
+        showTopView: visualState.showTopView,
+        detailLevel: renderDetailLevel,
+        includeWheelZones: false,
+      }),
+      [visualState.spec, visualState.showTopView, renderDetailLevel]
     );
 
     React.useEffect(() => {
@@ -197,6 +251,42 @@
       if (visualFrameRef.current != null) {
         window.cancelAnimationFrame(visualFrameRef.current);
       }
+
+      if (churnCooldownTimerRef.current != null) {
+        window.clearTimeout(churnCooldownTimerRef.current);
+      }
+
+      if (wheelActiveTimerRef.current != null) {
+        window.clearTimeout(wheelActiveTimerRef.current);
+      }
+    }, []);
+
+    const markHighChurn = React.useCallback((interactionFocus = null) => {
+      setRenderDetailLevel("fast");
+      setActiveInteractionFocus(interactionFocus);
+
+      if (churnCooldownTimerRef.current != null) {
+        window.clearTimeout(churnCooldownTimerRef.current);
+      }
+
+      churnCooldownTimerRef.current = window.setTimeout(() => {
+        setRenderDetailLevel("full");
+        setActiveInteractionFocus(null);
+        churnCooldownTimerRef.current = null;
+      }, HIGH_CHURN_COOLDOWN_MS);
+    }, []);
+
+    const markActiveWheelField = React.useCallback((fieldName) => {
+      setActiveWheelFieldName(fieldName);
+
+      if (wheelActiveTimerRef.current != null) {
+        window.clearTimeout(wheelActiveTimerRef.current);
+      }
+
+      wheelActiveTimerRef.current = window.setTimeout(() => {
+        setActiveWheelFieldName(null);
+        wheelActiveTimerRef.current = null;
+      }, WHEEL_ACTIVE_COOLDOWN_MS);
     }, []);
 
     React.useEffect(() => {
@@ -322,6 +412,10 @@
           return;
         }
 
+        markHighChurn({
+          type: "drag",
+          hotspotKey: gesture.hotspotKey,
+        });
         gesture.currentValue = desiredValue;
         handlersRef.current.onStepAdjustField?.(gesture.fieldName, stepDelta);
       };
@@ -376,6 +470,7 @@
 
       const clearActiveDrag = () => {
         clearDebouncedDragUpdate();
+        setActiveDragHotspotKey(null);
 
         if (dragGestureRef.current?.pointerId != null) {
           releaseCapturedPointer(dragGestureRef.current.pointerId);
@@ -408,6 +503,7 @@
           minCenterScreen: pending.minCenterScreen,
           maxCenterScreen: pending.maxCenterScreen,
         };
+        setActiveDragHotspotKey(pending.hotspotKey);
         dragPendingRef.current = null;
       };
 
@@ -564,6 +660,11 @@
         const direction = event.deltaY < 0 ? 1 : -1;
         wheelLockUntilRef.current = Date.now() + WHEEL_LOCK_TTL_MS;
         lockGlobalWheelScroll();
+        markActiveWheelField(fieldName);
+        markHighChurn({
+          type: "wheel",
+          fieldName,
+        });
         handlersRef.current.onAdjustField?.(fieldName, direction);
       };
 
@@ -579,7 +680,12 @@
           return;
         }
 
+        const wheelZone = event.target.closest(".figure-wheel-hotspot");
         const dragZone = event.target.closest(".figure-drag-hotspot");
+
+        if (wheelZone) {
+          return;
+        }
 
         if (dragZone) {
           if (isMousePointer && event.button !== 0) {
@@ -593,6 +699,7 @@
 
         clearPendingDrag();
         clearActiveDrag();
+        onDismissField?.();
       };
 
       const handlePointerMove = (event) => {
@@ -644,7 +751,7 @@
         container.removeEventListener("pointercancel", handlePointerEnd);
         container.removeEventListener("lostpointercapture", handlePointerEnd);
       };
-    }, []);
+    }, [markActiveWheelField, markHighChurn, onDismissField]);
 
     return (
       <div
@@ -656,7 +763,7 @@
           dangerouslySetInnerHTML={{ __html: svgMarkup }}
         />
         <div className="figure-interaction-overlay" aria-hidden="true">
-          {wheelHotspots.map((hotspot) => (
+          {visibleWheelHotspots.map((hotspot) => (
             <div
               key={hotspot.key}
               className={`figure-wheel-hotspot ${
@@ -683,7 +790,7 @@
               />
             </div>
           ))}
-          {dragHotspots.map((hotspot) => (
+          {visibleDragHotspots.map((hotspot) => (
             <div
               key={hotspot.key}
               className="figure-drag-hotspot"
