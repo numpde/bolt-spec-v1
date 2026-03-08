@@ -66,7 +66,7 @@
   const BOLT_FIELDS = [
     {
       name: "nominalDiameterMm",
-      label: "Nominal Diameter",
+      label: "Nominal diameter",
       hint: "Thread major diameter",
       min: 4,
       max: 8,
@@ -82,7 +82,7 @@
     },
     {
       name: "underHeadLengthMm",
-      label: "Under-Head Length",
+      label: "Under-head length",
       hint: "Shank length from head seat to tip",
       min: 6,
       max: 60,
@@ -90,7 +90,7 @@
     },
     {
       name: "threadedLengthMm",
-      label: "Threaded Length",
+      label: "Threaded length",
       hint: "Threaded portion of the shank, capped to under-head length minus 1 mm",
       min: 0.5,
       max: 60,
@@ -98,7 +98,7 @@
     },
     {
       name: "headDiameterMm",
-      label: "Head Diameter",
+      label: "Head diameter",
       hint: "Top-view outer diameter",
       min: 5,
       max: 14,
@@ -106,7 +106,7 @@
     },
     {
       name: "headHeightMm",
-      label: "Head Height",
+      label: "Head height",
       hint: "Axial head thickness",
       min: 2,
       max: 8,
@@ -114,7 +114,7 @@
     },
     {
       name: "tipChamferMm",
-      label: "Tip Chamfer",
+      label: "Tip chamfer",
       hint: "Side-view tip taper length",
       min: 0,
       max: 2,
@@ -122,7 +122,7 @@
     },
     {
       name: "socketDepthMm",
-      label: "Socket Depth",
+      label: "Socket depth",
       hint: "Side-view hidden depth",
       min: 1,
       max: 5,

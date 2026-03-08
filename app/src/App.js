@@ -326,8 +326,8 @@
           <section className="preview-card">
             <div className="card-heading">
               <div>
-                <p className="eyebrow">Shared Geometry State</p>
-                <h2>Live Views</h2>
+                <p className="eyebrow">Shared geometry state</p>
+                <h2>Live views</h2>
               </div>
               <div className="card-heading-actions">
                 <button
@@ -336,7 +336,7 @@
                   onClick={() => setShowTopView((current) => !current)}
                   aria-pressed={showTopView}
                 >
-                  Top View {showTopView ? "On" : "Off"}
+                  Top view {showTopView ? "on" : "off"}
                 </button>
                 <p className="status-chip">
                   {spec.driveLabel} socket · {spec.nominalDiameterMm.toFixed(1)} mm

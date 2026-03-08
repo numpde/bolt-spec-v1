@@ -18,7 +18,7 @@
               React.createElement(
                 "div",
                 null,
-                React.createElement("p", { className: "eyebrow" }, "Preset Catalog"),
+                React.createElement("p", { className: "eyebrow" }, "Preset catalog"),
                 React.createElement("h2", null, title)
               )
             ),
@@ -38,7 +38,7 @@
     } catch (error) {
       console.error("Failed to load bolt preset catalog", error);
       renderShellMessage(
-        "Catalog Load Failed",
+        "Catalog load failed",
         "The preset YAML could not be read. Check the console and the static file path."
       );
     }

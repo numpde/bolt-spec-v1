@@ -3,8 +3,8 @@
 
   const ParameterPanelImpl = ({ spec, onFieldChange }) => (
     <section className="panel-card">
-      <p className="eyebrow">Editable Parameters</p>
-      <h2>Dimensional Inputs</h2>
+      <p className="eyebrow">Editable parameters</p>
+      <h2>Dimensional inputs</h2>
       <div className="field-grid">
         {BOLT_FIELDS.map((field) => {
           const fieldMin = field.name === "threadedLengthMm" ? 0.5 : field.min;

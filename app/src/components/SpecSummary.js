@@ -2,16 +2,16 @@
   const formatMm = (value) => `${value.toFixed(2)} mm`;
 
   const summaryMetrics = (spec) => [
-    { label: "Thread Starts", value: formatMm(spec.threadStartMm) },
-    { label: "Thread Turns", value: spec.threadTurns.toFixed(2) },
-    { label: "Tip Flat Radius", value: formatMm(spec.tipFlatRadiusMm) },
-    { label: "Socket Depth", value: formatMm(spec.socketDepthMm) },
+    { label: "Thread starts", value: formatMm(spec.threadStartMm) },
+    { label: "Thread turns", value: spec.threadTurns.toFixed(2) },
+    { label: "Tip flat radius", value: formatMm(spec.tipFlatRadiusMm) },
+    { label: "Socket depth", value: formatMm(spec.socketDepthMm) },
   ];
 
   const SpecSummaryImpl = ({ spec }) => (
     <section className="panel-card">
-      <p className="eyebrow">Derived State</p>
-      <h2>Geometry Summary</h2>
+      <p className="eyebrow">Derived state</p>
+      <h2>Geometry summary</h2>
       <div className="summary-grid">
         {summaryMetrics(spec).map((metric) => (
           <div className="summary-metric" key={metric.label}>

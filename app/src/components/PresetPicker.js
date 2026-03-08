@@ -3,8 +3,8 @@
 
   const PresetPickerImpl = ({ selectedPreset, onSelect }) => (
     <section className="panel-card">
-      <p className="eyebrow">Preset Baselines</p>
-      <h2>Named Presets</h2>
+      <p className="eyebrow">Preset baselines</p>
+      <h2>Named presets</h2>
       <p className="card-copy">
         Start from a named baseline. Once you change any dimension, the state is
         custom and no preset stays active.
