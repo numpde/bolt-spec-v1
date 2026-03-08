@@ -3,7 +3,11 @@
 const fs = require("fs");
 const path = require("path");
 
-const { cloneBoltPreset, BOLT_PRESETS } = require("../app/src/utils/boltPresets.js");
+const {
+  loadBoltPresetCatalogSync,
+  cloneBoltPreset,
+  getBoltPresets,
+} = require("../app/src/utils/boltPresets.js");
 const { renderBoltFigureSvg } = require("../app/src/utils/boltFigureRenderer.js");
 
 const parseArgs = (argv) => {
@@ -26,8 +30,10 @@ const parseArgs = (argv) => {
 
 const main = () => {
   const options = parseArgs(process.argv.slice(2));
+  const catalog = loadBoltPresetCatalogSync();
+  const presets = getBoltPresets();
 
-  if (!BOLT_PRESETS[options.preset]) {
+  if (!catalog || !presets[options.preset]) {
     throw new Error(`Unknown preset: ${options.preset}`);
   }
 

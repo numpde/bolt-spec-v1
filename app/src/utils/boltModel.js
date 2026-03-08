@@ -12,7 +12,7 @@
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
   const T25_OUTER_RADIUS_MM = 2.25;
   const T25_INNER_RADIUS_MM = 1.625;
-  const THREAD_LENGTH_OFFSET_MM = 5;
+  const THREAD_LENGTH_OFFSET_MM = 1;
 
   const round3 = (value) => Math.round(value * 1000) / 1000;
   const getThreadedLengthMaxMm = (underHeadLengthMm) => (

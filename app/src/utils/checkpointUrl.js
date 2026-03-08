@@ -17,20 +17,23 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function(presetApi, modelApi) {
   const {
     BOLT_FIELDS,
-    BOLT_PRESETS,
     cloneBoltPreset,
+    getBoltPresets,
+    getDefaultPresetKey,
   } = presetApi;
   const { normalizeBoltSpec } = modelApi;
 
-  const DEFAULT_PRESET_KEY = "m5";
   const CHECKPOINT_HISTORY_KIND = "bolt-checkpoint-v1";
   const EDITABLE_FIELD_NAMES = BOLT_FIELDS.map((field) => field.name);
 
-  const resolvePresetKey = (presetKey) => (
-    Object.prototype.hasOwnProperty.call(BOLT_PRESETS, presetKey)
+  const resolvePresetKey = (presetKey) => {
+    const presets = getBoltPresets();
+    const defaultPresetKey = getDefaultPresetKey();
+
+    return Object.prototype.hasOwnProperty.call(presets, presetKey)
       ? presetKey
-      : DEFAULT_PRESET_KEY
-  );
+      : defaultPresetKey;
+  };
 
   const coerceDraftSpec = (presetKey, draftSpec = {}) => {
     const normalizedSpec = normalizeBoltSpec({
@@ -125,7 +128,6 @@
   );
 
   return {
-    DEFAULT_PRESET_KEY,
     CHECKPOINT_HISTORY_KIND,
     normalizeCheckpointState,
     buildCheckpointUrl,

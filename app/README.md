@@ -44,6 +44,10 @@ python3 -m http.server
 
 Then visit `http://localhost:8000/app/`.
 
+Local app assets are cache-busted on a short rolling revision window in
+`index.html`, so browser-side JS/CSS/YAML changes should refresh quickly even
+with a plain static server.
+
 For a fast artifact-only preview, render the shared figure directly:
 
 ```bash

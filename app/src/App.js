@@ -1,10 +1,12 @@
 (function() {
   const {
+    applySizeFamilyToDraftSpec,
+    getBoltPresets,
+    getDefaultPresetKey,
     cloneBoltPreset,
     normalizeBoltSpec,
     getThreadedLengthMaxMm,
     BOLT_FIELDS,
-    DEFAULT_PRESET_KEY,
     normalizeCheckpointState,
     buildCheckpointUrl,
     parseCheckpointFromLocation,
@@ -13,6 +15,7 @@
   } = window;
   const {
     CheckpointCard,
+    FieldControlTray,
     PresetPicker,
     ParameterPanel,
     BoltFigure,
@@ -21,9 +24,24 @@
   const EDITABLE_FIELD_NAMES = BOLT_FIELDS.map((field) => field.name);
   const fieldMap = Object.fromEntries(BOLT_FIELDS.map((field) => [field.name, field]));
 
+  const getMatchingPresetKey = (draftLikeSpec) => {
+    const normalizedDraftSpec = normalizeBoltSpec(draftLikeSpec);
+    const normalizedPresetEntries = Object.entries(getBoltPresets()).map(([presetKey, preset]) => (
+      [presetKey, normalizeBoltSpec(preset)]
+    ));
+
+    return (
+      normalizedPresetEntries.find(([, normalizedPreset]) => (
+        EDITABLE_FIELD_NAMES.every((fieldName) => (
+          normalizedDraftSpec[fieldName] === normalizedPreset[fieldName]
+        ))
+      ))?.[0] || null
+    );
+  };
+
   const getDefaultAppState = () => normalizeCheckpointState({
-    presetName: DEFAULT_PRESET_KEY,
-    draftSpec: cloneBoltPreset(DEFAULT_PRESET_KEY),
+    presetName: getDefaultPresetKey(),
+    draftSpec: cloneBoltPreset(getDefaultPresetKey()),
     showTopView: true,
   });
 
@@ -41,18 +59,27 @@
 
   const App = () => {
     const initialAppState = React.useMemo(() => getInitialAppState(), []);
-    const hasInitialCheckpoint = React.useMemo(() => (
-      Boolean(
-        extractCheckpointFromHistoryState(window.history.state) ||
-        parseCheckpointFromLocation(window.location)
-      )
-    ), []);
-
     const [presetName, setPresetName] = React.useState(initialAppState.presetName);
     const [draftSpec, setDraftSpec] = React.useState(initialAppState.draftSpec);
     const [showTopView, setShowTopView] = React.useState(initialAppState.showTopView);
+    const [activeFieldName, setActiveFieldName] = React.useState(null);
+    const pendingHistorySyncRef = React.useRef(null);
+    const deferredDraftSpec = React.useDeferredValue(draftSpec);
+    const spec = React.useMemo(() => normalizeBoltSpec(draftSpec), [draftSpec]);
+    const deferredSpec = React.useMemo(
+      () => normalizeBoltSpec(deferredDraftSpec),
+      [deferredDraftSpec]
+    );
+    const activePresetKey = React.useMemo(
+      () => getMatchingPresetKey(draftSpec),
+      [draftSpec]
+    );
+    const deferredActivePresetKey = React.useMemo(
+      () => getMatchingPresetKey(deferredDraftSpec),
+      [deferredDraftSpec]
+    );
 
-    const getFieldBounds = (draftLikeSpec, fieldName) => {
+    const getFieldBounds = React.useCallback((draftLikeSpec, fieldName) => {
       const field = fieldMap[fieldName];
 
       if (!field) {
@@ -80,9 +107,9 @@
       }
 
       return { min, max };
-    };
+    }, []);
 
-    const coerceDraftSpec = (nextDraftSpec, nextPresetName = presetName) => {
+    const coerceDraftSpec = React.useCallback((nextDraftSpec, nextPresetName = presetName) => {
       const checkpointState = normalizeCheckpointState({
         presetName: nextPresetName,
         draftSpec: nextDraftSpec,
@@ -90,16 +117,16 @@
       });
 
       return checkpointState.draftSpec;
-    };
+    }, [presetName, showTopView]);
 
     const buildCurrentAppState = React.useCallback((overrides = {}) => (
       normalizeCheckpointState({
-        presetName,
+        presetName: activePresetKey || presetName,
         draftSpec,
         showTopView,
         ...overrides,
       })
-    ), [draftSpec, presetName, showTopView]);
+    ), [activePresetKey, draftSpec, presetName, showTopView]);
 
     const applyAppState = React.useCallback((nextAppState) => {
       setPresetName(nextAppState.presetName);
@@ -110,13 +137,9 @@
     const commitCheckpointToHistory = React.useCallback((mode, checkpointLike) => {
       const checkpointState = normalizeCheckpointState(checkpointLike);
       const nextUrl = buildCheckpointUrl(checkpointState, window.location);
-      const currentUrl = `${window.location.pathname}${window.location.search}`;
-      const resolvedMode = mode === "push" && nextUrl === currentUrl
-        ? "replace"
-        : mode;
       const historyState = buildCheckpointHistoryState(checkpointState);
 
-      if (resolvedMode === "push") {
+      if (mode === "push") {
         window.history.pushState(historyState, "", nextUrl);
       } else {
         window.history.replaceState(historyState, "", nextUrl);
@@ -125,16 +148,51 @@
       return checkpointState;
     }, []);
 
-    React.useEffect(() => {
-      if (!hasInitialCheckpoint) {
-        return;
+    const cancelPendingHistorySync = React.useCallback(() => {
+      if (pendingHistorySyncRef.current?.timerId) {
+        window.clearTimeout(pendingHistorySyncRef.current.timerId);
       }
 
-      commitCheckpointToHistory("replace", initialAppState);
-    }, [commitCheckpointToHistory, hasInitialCheckpoint, initialAppState]);
+      pendingHistorySyncRef.current = null;
+    }, []);
+
+    const flushPendingHistorySync = React.useCallback((fallbackCheckpointLike = null) => {
+      const pendingCheckpoint = pendingHistorySyncRef.current?.checkpoint || null;
+
+      cancelPendingHistorySync();
+
+      if (pendingCheckpoint) {
+        return commitCheckpointToHistory("replace", pendingCheckpoint);
+      }
+
+      if (fallbackCheckpointLike) {
+        return commitCheckpointToHistory("replace", fallbackCheckpointLike);
+      }
+
+      return null;
+    }, [cancelPendingHistorySync, commitCheckpointToHistory]);
+
+    const scheduleHistorySync = React.useCallback((checkpointLike) => {
+      const checkpointState = normalizeCheckpointState(checkpointLike);
+
+      cancelPendingHistorySync();
+      pendingHistorySyncRef.current = {
+        checkpoint: checkpointState,
+        timerId: window.setTimeout(() => {
+          commitCheckpointToHistory("replace", checkpointState);
+          pendingHistorySyncRef.current = null;
+        }, 160),
+      };
+    }, [cancelPendingHistorySync, commitCheckpointToHistory]);
+
+    React.useEffect(() => {
+      scheduleHistorySync(buildCurrentAppState());
+    }, [buildCurrentAppState, scheduleHistorySync]);
 
     React.useEffect(() => {
       const handlePopState = (event) => {
+        cancelPendingHistorySync();
+
         const nextCheckpoint = (
           extractCheckpointFromHistoryState(event.state) ||
           parseCheckpointFromLocation(window.location) ||
@@ -149,11 +207,15 @@
       return () => {
         window.removeEventListener("popstate", handlePopState);
       };
-    }, [applyAppState]);
+    }, [applyAppState, cancelPendingHistorySync]);
 
-    const handlePresetSelect = (nextPresetName) => {
+    React.useEffect(() => () => {
+      cancelPendingHistorySync();
+    }, [cancelPendingHistorySync]);
+
+    const handlePresetSelect = React.useCallback((nextPresetName) => {
       const currentCheckpoint = buildCurrentAppState();
-      commitCheckpointToHistory("replace", currentCheckpoint);
+      flushPendingHistorySync(currentCheckpoint);
 
       const nextCheckpoint = normalizeCheckpointState({
         presetName: nextPresetName,
@@ -161,22 +223,31 @@
         showTopView,
       });
 
-      applyAppState(nextCheckpoint);
       commitCheckpointToHistory("push", nextCheckpoint);
-    };
+      applyAppState(nextCheckpoint);
+    }, [
+      applyAppState,
+      buildCurrentAppState,
+      commitCheckpointToHistory,
+      flushPendingHistorySync,
+      showTopView,
+    ]);
 
-    const handleCheckpoint = () => {
-      commitCheckpointToHistory("push", buildCurrentAppState());
-    };
+    const handleCheckpoint = React.useCallback(() => {
+      const currentCheckpoint = buildCurrentAppState();
 
-    const handleFieldChange = (fieldName, nextValue) => {
+      flushPendingHistorySync(currentCheckpoint);
+      commitCheckpointToHistory("push", currentCheckpoint);
+    }, [buildCurrentAppState, commitCheckpointToHistory, flushPendingHistorySync]);
+
+    const handleFieldChange = React.useCallback((fieldName, nextValue) => {
       setDraftSpec((current) => coerceDraftSpec({
         ...current,
         [fieldName]: nextValue,
       }));
-    };
+    }, [coerceDraftSpec]);
 
-    const applyFieldStepDelta = (fieldName, stepDelta) => {
+    const applyFieldStepDelta = React.useCallback((fieldName, stepDelta) => {
       const field = fieldMap[fieldName];
 
       if (!field) {
@@ -203,25 +274,56 @@
           [fieldName]: Number(clampedValue.toFixed(decimals)),
         });
       });
-    };
+    }, [coerceDraftSpec]);
 
-    const handleFieldWheelAdjust = (fieldName, direction) => {
+    const handleFieldWheelAdjust = React.useCallback((fieldName, direction) => {
       applyFieldStepDelta(fieldName, direction);
-    };
+    }, [applyFieldStepDelta]);
 
-    const handleFieldStepAdjust = (fieldName, stepDelta) => {
+    const handleFieldStepAdjust = React.useCallback((fieldName, stepDelta) => {
       if (!Number.isFinite(stepDelta) || stepDelta === 0) {
         return;
       }
 
       applyFieldStepDelta(fieldName, stepDelta);
-    };
+    }, [applyFieldStepDelta]);
 
-    const spec = normalizeBoltSpec(draftSpec);
+    const activeField = activeFieldName ? fieldMap[activeFieldName] : null;
+    const deferredActiveFieldBounds = activeFieldName
+      ? getFieldBounds(deferredDraftSpec, activeFieldName)
+      : { min: 0, max: 0 };
     const checkpointHref = buildCheckpointUrl(
       buildCurrentAppState(),
       window.location
     );
+
+    const handleApplySizeFamily = React.useCallback((sizePresetKey) => {
+      setPresetName(sizePresetKey);
+      setDraftSpec((current) => coerceDraftSpec(
+        applySizeFamilyToDraftSpec(current, sizePresetKey),
+        sizePresetKey
+      ));
+    }, [coerceDraftSpec]);
+
+    const handleCloseActiveField = React.useCallback(() => {
+      setActiveFieldName(null);
+    }, []);
+
+    const handleActiveTraySliderChange = React.useCallback((nextValue) => {
+      if (!activeFieldName) {
+        return;
+      }
+
+      handleFieldChange(activeFieldName, nextValue);
+    }, [activeFieldName, handleFieldChange]);
+
+    const handleActiveTrayStepAdjust = React.useCallback((stepDelta) => {
+      if (!activeFieldName) {
+        return;
+      }
+
+      handleFieldStepAdjust(activeFieldName, stepDelta);
+    }, [activeFieldName, handleFieldStepAdjust]);
 
     return (
       <div className="app-shell">
@@ -250,14 +352,29 @@
               spec={spec}
               onAdjustField={handleFieldWheelAdjust}
               onStepAdjustField={handleFieldStepAdjust}
+              onSelectField={setActiveFieldName}
+              activeFieldName={activeFieldName}
               showTopView={showTopView}
             />
+            {activeField ? (
+              <FieldControlTray
+                field={activeField}
+                value={deferredDraftSpec[activeField.name]}
+                min={deferredActiveFieldBounds.min}
+                max={deferredActiveFieldBounds.max}
+                activeSizeFamilyKey={deferredActivePresetKey}
+                onClose={handleCloseActiveField}
+                onSliderChange={handleActiveTraySliderChange}
+                onStepAdjust={handleActiveTrayStepAdjust}
+                onApplySizeFamily={handleApplySizeFamily}
+              />
+            ) : null}
           </section>
         </main>
 
         <aside className="control-column">
           <PresetPicker
-            selectedPreset={presetName}
+            selectedPreset={deferredActivePresetKey}
             onSelect={handlePresetSelect}
           />
 
@@ -267,11 +384,11 @@
           />
 
           <ParameterPanel
-            spec={draftSpec}
+            spec={deferredDraftSpec}
             onFieldChange={handleFieldChange}
           />
 
-          <SpecSummary spec={spec} />
+          <SpecSummary spec={deferredSpec} />
         </aside>
       </div>
     );

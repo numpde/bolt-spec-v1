@@ -1,0 +1,42 @@
+defaultPresetKey: m5
+sizeFamilyPresetKeys:
+  - m4
+  - m5
+  - m6
+presets:
+  m4:
+    displayName: Coarse M4
+    presetName: M4
+    nominalDiameterMm: 4.0
+    pitchMm: 0.7
+    underHeadLengthMm: 18.0
+    threadedLengthMm: 13.0
+    headDiameterMm: 6.0
+    headHeightMm: 3.0
+    tipChamferMm: 0.4
+    socketDepthMm: 3.0
+    driveLabel: T25
+  m5:
+    displayName: Coarse M5
+    presetName: M5
+    nominalDiameterMm: 5.0
+    pitchMm: 0.8
+    underHeadLengthMm: 18.0
+    threadedLengthMm: 13.0
+    headDiameterMm: 7.0
+    headHeightMm: 3.5
+    tipChamferMm: 0.5
+    socketDepthMm: 3.0
+    driveLabel: T25
+  m6:
+    displayName: Coarse M6
+    presetName: M6
+    nominalDiameterMm: 6.0
+    pitchMm: 1.0
+    underHeadLengthMm: 18.0
+    threadedLengthMm: 13.0
+    headDiameterMm: 8.4
+    headHeightMm: 4.2
+    tipChamferMm: 0.6
+    socketDepthMm: 3.0
+    driveLabel: T25

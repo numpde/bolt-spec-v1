@@ -27,8 +27,8 @@
     .figure-dim { stroke: #7f4e31; stroke-width: 0.85; fill: none; }
     .figure-text { fill: #7f4e31; font-family: "DejaVu Sans Mono", monospace; font-size: 11px; pointer-events: none; user-select: none; }
     .figure-caption { fill: #445960; font-family: "DejaVu Sans Mono", monospace; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; }
-    .figure-wheel-zone { fill: transparent; stroke: transparent; stroke-width: 0; rx: 5; cursor: ns-resize; pointer-events: all; }
-    .figure-wheel-zone:hover { fill: transparent; stroke: transparent; }
+    .figure-wheel-zone { fill: rgba(182, 64, 64, 0.085); stroke: rgba(182, 64, 64, 0.16); stroke-width: 0.7; cursor: ns-resize; pointer-events: all; }
+    .figure-wheel-zone:hover { fill: rgba(182, 64, 64, 0.12); stroke: rgba(182, 64, 64, 0.22); }
   `;
 
   const EXCLUDED_DRAG_HOTSPOT_KEYS = new Set([
@@ -320,19 +320,16 @@
     ].join("");
   };
 
-  const renderDimensionWheelZone = (dimension) => {
+  const buildDimensionWheelRect = (dimension) => {
     if (!dimension.fieldName) {
-      return "";
+      return null;
     }
 
     const fontSize = 11;
     const ascent = fontSize * 0.78;
     const descent = fontSize * 0.22;
     const charWidth = 7.1;
-    const zoneScale = 1.5;
-    const zoneHeightScale = 1.5;
     const isVertical = dimension.axis === "vertical";
-    const paddingX = isVertical ? 12 : 10;
     const textWidth = dimension.label.length * charWidth;
     const textCenterX = dimension.textAnchor === "start"
       ? dimension.textX + textWidth / 2
@@ -340,17 +337,38 @@
         ? dimension.textX - textWidth / 2
         : dimension.textX;
     const textCenterY = dimension.textY - (ascent - descent) / 2;
-    const baseWidth = Math.max(
-      textWidth + paddingX * 2,
-      isVertical ? 60 : 52
-    );
-    const baseHeight = isVertical ? 30 : 24;
-    const width = baseWidth * zoneScale;
-    const height = baseHeight * zoneScale * zoneHeightScale;
-    const x = textCenterX - width / 2;
-    const y = textCenterY - height / 2;
+    const hintWidth = 72;
+    const hintHeight = 34;
+    const hitWidth = isVertical ? 144 : 132;
+    const hitHeight = 68;
+    const hintX = textCenterX - hintWidth / 2;
+    const hintY = textCenterY - hintHeight / 2;
+    const hitX = textCenterX - hitWidth / 2;
+    const hitY = textCenterY - hitHeight / 2;
 
-    return `<rect class="figure-wheel-zone" data-field-name="${dimension.fieldName}" x="${x}" y="${y}" width="${width}" height="${height}" />`;
+    return {
+      key: `${dimension.fieldName}:wheel`,
+      fieldName: dimension.fieldName,
+      hintX,
+      hintY,
+      hintWidth,
+      hintHeight,
+      hitX,
+      hitY,
+      hitWidth,
+      hitHeight,
+      radius: hintHeight / 2,
+    };
+  };
+
+  const renderDimensionWheelZone = (dimension) => {
+    const rect = buildDimensionWheelRect(dimension);
+
+    if (!rect) {
+      return "";
+    }
+
+    return `<rect class="figure-wheel-zone" data-field-name="${rect.fieldName}" x="${rect.hintX}" y="${rect.hintY}" width="${rect.hintWidth}" height="${rect.hintHeight}" rx="${rect.radius}" ry="${rect.radius}" />`;
   };
 
   const buildDimensionDragRects = (dimension) => {
@@ -419,6 +437,12 @@
       .filter((rect) => !EXCLUDED_DRAG_HOTSPOT_KEYS.has(rect.key))
   );
 
+  const buildWheelHotspots = (scene) => (
+    scene.dimensions
+      .map((dimension) => buildDimensionWheelRect(dimension))
+      .filter(Boolean)
+  );
+
   const renderBoltFigureSvg = (inputSpec, options = {}) => {
     const scene = buildBoltFigureScene(inputSpec, options);
     const {
@@ -475,6 +499,7 @@
   return {
     buildBoltFigureScene,
     buildDragHotspots,
+    buildWheelHotspots,
     renderBoltFigureSvg,
   };
 });

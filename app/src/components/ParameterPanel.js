@@ -1,7 +1,7 @@
 (function() {
   const { BOLT_FIELDS, getThreadedLengthMaxMm } = window;
 
-  const ParameterPanel = ({ spec, onFieldChange }) => (
+  const ParameterPanelImpl = ({ spec, onFieldChange }) => (
     <section className="panel-card">
       <p className="eyebrow">Editable Parameters</p>
       <h2>Dimensional Inputs</h2>
@@ -34,5 +34,5 @@
     </section>
   );
 
-  window.ParameterPanel = ParameterPanel;
+  window.ParameterPanel = React.memo(ParameterPanelImpl);
 })();

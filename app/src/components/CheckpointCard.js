@@ -2,17 +2,17 @@
   const CheckpointCard = ({ checkpointHref, onCheckpoint }) => (
     <section className="panel-card">
       <p className="eyebrow">Checkpoint</p>
-      <h2>Shareable URL</h2>
+      <h2>Shareable State</h2>
       <p className="card-copy">
-        Write the current preset, view toggle, and dimensions into the URL so
-        the same state restores on reload.
+        The URL mirrors the live state. Use this button to push a browser
+        history checkpoint you can return to with Back.
       </p>
       <button
         className="checkpoint-button"
         type="button"
         onClick={onCheckpoint}
       >
-        Checkpoint Current State
+        Push Checkpoint
       </button>
       <code className="checkpoint-url">{checkpointHref}</code>
     </section>

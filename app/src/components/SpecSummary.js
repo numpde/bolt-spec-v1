@@ -8,7 +8,7 @@
     { label: "Socket Depth", value: formatMm(spec.socketDepthMm) },
   ];
 
-  const SpecSummary = ({ spec }) => (
+  const SpecSummaryImpl = ({ spec }) => (
     <section className="panel-card">
       <p className="eyebrow">Derived State</p>
       <h2>Geometry Summary</h2>
@@ -27,5 +27,5 @@
     </section>
   );
 
-  window.SpecSummary = SpecSummary;
+  window.SpecSummary = React.memo(SpecSummaryImpl);
 })();

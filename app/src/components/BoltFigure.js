@@ -2,6 +2,7 @@
   const {
     buildBoltFigureScene,
     buildDragHotspots,
+    buildWheelHotspots,
     renderBoltFigureSvg,
     normalizeBoltSpec,
   } = window;
@@ -15,6 +16,12 @@
   const WHEEL_LOCK_TTL_MS = 420;
   const DEFAULT_DRAG_PIXELS_PER_STEP = 3;
   const DRAG_HOLD_MS = 180;
+  const DRAG_DEBOUNCE_MS = 18;
+  const VISUAL_IDLE_WINDOW_MS = 56;
+  const getGlobalWheelLockUntil = () => Number(globalThis.__BOLT_WHEEL_LOCK_UNTIL__ || 0);
+  const lockGlobalWheelScroll = (ttlMs = WHEEL_LOCK_TTL_MS) => {
+    globalThis.__BOLT_WHEEL_LOCK_UNTIL__ = Date.now() + ttlMs;
+  };
 
   const quantizeStepCount = (delta, pixelsPerStep) => (
     delta > 0
@@ -70,7 +77,7 @@
     let max = Number.isFinite(field.max) ? field.max : Infinity;
 
     if (fieldName === "threadedLengthMm") {
-      max = Math.min(max, normalized.underHeadLengthMm - 5);
+      max = Math.min(max, normalized.underHeadLengthMm - 1);
     } else if (fieldName === "socketDepthMm") {
       max = Math.min(max, normalized.headHeightMm);
     } else if (fieldName === "tipChamferMm") {
@@ -89,24 +96,46 @@
     spec,
     onAdjustField,
     onStepAdjustField,
+    onSelectField,
+    activeFieldName = null,
     showTopView = true,
   }) => {
     const containerRef = React.useRef(null);
     const wheelLockUntilRef = React.useRef(0);
     const dragPendingRef = React.useRef(null);
     const dragGestureRef = React.useRef(null);
+    const dragDebounceRef = React.useRef(null);
+    const visualFrameRef = React.useRef(null);
+    const lastVisualCommitMsRef = React.useRef(-Infinity);
+    const latestVisualStateRef = React.useRef({
+      spec,
+      showTopView,
+      activeFieldName,
+    });
     const handlersRef = React.useRef({
       onAdjustField,
       onStepAdjustField,
     });
+    const [visualState, setVisualState] = React.useState(() => ({
+      spec,
+      showTopView,
+      activeFieldName,
+    }));
 
-    const scene = buildBoltFigureScene(spec, { showTopView });
-    const dragHotspots = buildDragHotspots(scene);
+    const scene = React.useMemo(
+      () => buildBoltFigureScene(visualState.spec, { showTopView: visualState.showTopView }),
+      [visualState.spec, visualState.showTopView]
+    );
+    const dragHotspots = React.useMemo(() => buildDragHotspots(scene), [scene]);
+    const wheelHotspots = React.useMemo(() => buildWheelHotspots(scene), [scene]);
     const sceneRef = React.useRef(scene);
     const dragHotspotsRef = React.useRef(dragHotspots);
     const specRef = React.useRef(spec);
     const showTopViewRef = React.useRef(showTopView);
-    const svgMarkup = renderBoltFigureSvg(spec, { showTopView });
+    const svgMarkup = React.useMemo(
+      () => renderBoltFigureSvg(visualState.spec, { showTopView: visualState.showTopView }),
+      [visualState.spec, visualState.showTopView]
+    );
 
     React.useEffect(() => {
       handlersRef.current = {
@@ -114,6 +143,61 @@
         onStepAdjustField,
       };
     }, [onAdjustField, onStepAdjustField]);
+
+    React.useLayoutEffect(() => {
+      latestVisualStateRef.current = {
+        spec,
+        showTopView,
+        activeFieldName,
+      };
+
+      const nextVisualState = latestVisualStateRef.current;
+      const now = performance.now();
+      const isIdle = now - lastVisualCommitMsRef.current > VISUAL_IDLE_WINDOW_MS;
+
+      if (isIdle && visualFrameRef.current == null) {
+        setVisualState((currentVisualState) => {
+          if (
+            currentVisualState.spec === nextVisualState.spec &&
+            currentVisualState.showTopView === nextVisualState.showTopView &&
+            currentVisualState.activeFieldName === nextVisualState.activeFieldName
+          ) {
+            return currentVisualState;
+          }
+
+          lastVisualCommitMsRef.current = now;
+          return nextVisualState;
+        });
+
+        return;
+      }
+
+      if (visualFrameRef.current != null) {
+        return;
+      }
+
+      visualFrameRef.current = window.requestAnimationFrame(() => {
+        visualFrameRef.current = null;
+        const scheduledVisualState = latestVisualStateRef.current;
+
+        setVisualState((currentVisualState) => (
+          currentVisualState.spec === scheduledVisualState.spec &&
+          currentVisualState.showTopView === scheduledVisualState.showTopView &&
+          currentVisualState.activeFieldName === scheduledVisualState.activeFieldName
+            ? currentVisualState
+            : (
+              lastVisualCommitMsRef.current = performance.now(),
+              scheduledVisualState
+            )
+        ));
+      });
+    }, [spec, showTopView, activeFieldName]);
+
+    React.useEffect(() => () => {
+      if (visualFrameRef.current != null) {
+        window.cancelAnimationFrame(visualFrameRef.current);
+      }
+    }, []);
 
     React.useEffect(() => {
       sceneRef.current = scene;
@@ -124,7 +208,9 @@
 
     React.useEffect(() => {
       const handleWindowWheel = (event) => {
-        if (Date.now() >= wheelLockUntilRef.current) {
+        const lockUntil = Math.max(wheelLockUntilRef.current, getGlobalWheelLockUntil());
+
+        if (Date.now() >= lockUntil) {
           return;
         }
 
@@ -176,7 +262,121 @@
         dragPendingRef.current = null;
       };
 
+      const clearDebouncedDragUpdate = () => {
+        if (dragDebounceRef.current?.timerId) {
+          window.clearTimeout(dragDebounceRef.current.timerId);
+        }
+
+        dragDebounceRef.current = null;
+      };
+
+      const commitDragGestureAtPosition = (gesture, pointerPositionPx) => {
+        if (!gesture) {
+          return;
+        }
+
+        const hasMovableInterval = Math.abs(
+          gesture.maxCenterScreen - gesture.minCenterScreen
+        ) > 0.5;
+        let desiredValue;
+
+        if (hasMovableInterval) {
+          const desiredCenterScreen = pointerPositionPx - gesture.pointerOffsetPx;
+          const lowCenter = Math.min(gesture.minCenterScreen, gesture.maxCenterScreen);
+          const highCenter = Math.max(gesture.minCenterScreen, gesture.maxCenterScreen);
+          const clampedCenter = clamp(desiredCenterScreen, lowCenter, highCenter);
+          const centerRatio = (
+            clampedCenter - gesture.minCenterScreen
+          ) / (
+            gesture.maxCenterScreen - gesture.minCenterScreen
+          );
+          const rawValue = gesture.minValue + centerRatio * (
+            gesture.maxValue - gesture.minValue
+          );
+          desiredValue = roundToStep(
+            rawValue,
+            gesture.stepSize,
+            gesture.minValue,
+            gesture.maxValue
+          );
+        } else {
+          const pointerAxisDeltaPx = pointerPositionPx - gesture.startPointerPositionPx;
+          const signedAxisDelta = pointerAxisDeltaPx * gesture.directionFactor;
+          const desiredStepDelta = quantizeStepCount(
+            signedAxisDelta,
+            gesture.pixelsPerStep
+          );
+          desiredValue = roundToStep(
+            gesture.startValue + desiredStepDelta * gesture.stepSize,
+            gesture.stepSize,
+            gesture.minValue,
+            gesture.maxValue
+          );
+        }
+
+        const stepDelta = Math.round(
+          (desiredValue - gesture.currentValue) / gesture.stepSize
+        );
+
+        if (stepDelta === 0) {
+          return;
+        }
+
+        gesture.currentValue = desiredValue;
+        handlersRef.current.onStepAdjustField?.(gesture.fieldName, stepDelta);
+      };
+
+      const flushDebouncedDragUpdate = (pointerId = null) => {
+        const pendingUpdate = dragDebounceRef.current;
+
+        if (!pendingUpdate) {
+          return;
+        }
+
+        if (pendingUpdate.timerId) {
+          window.clearTimeout(pendingUpdate.timerId);
+        }
+
+        dragDebounceRef.current = null;
+
+        if (pointerId != null && pendingUpdate.pointerId !== pointerId) {
+          return;
+        }
+
+        const gesture = dragGestureRef.current;
+
+        if (!gesture || gesture.pointerId !== pendingUpdate.pointerId) {
+          return;
+        }
+
+        commitDragGestureAtPosition(gesture, pendingUpdate.pointerPositionPx);
+      };
+
+      const scheduleDebouncedDragUpdate = (event) => {
+        const gesture = dragGestureRef.current;
+
+        if (!gesture || gesture.pointerId !== event.pointerId) {
+          return;
+        }
+
+        dragDebounceRef.current = {
+          pointerId: event.pointerId,
+          pointerPositionPx: axisPosition(event, gesture.axis),
+          timerId: dragDebounceRef.current?.timerId || null,
+        };
+
+        if (dragDebounceRef.current.timerId) {
+          return;
+        }
+
+        dragDebounceRef.current.timerId = window.setTimeout(() => {
+          flushDebouncedDragUpdate();
+        }, DRAG_DEBOUNCE_MS);
+      };
+
       const clearActiveDrag = () => {
+        clearDebouncedDragUpdate();
+
         if (dragGestureRef.current?.pointerId != null) {
           releaseCapturedPointer(dragGestureRef.current.pointerId);
         }
@@ -349,68 +549,9 @@
         }
       };
 
-      const updateDragGesture = (event) => {
-        const gesture = dragGestureRef.current;
-
-        if (!gesture || gesture.pointerId !== event.pointerId) {
-          return;
-        }
-
-        const pointerPositionPx = axisPosition(event, gesture.axis);
-        const hasMovableInterval = Math.abs(
-          gesture.maxCenterScreen - gesture.minCenterScreen
-        ) > 0.5;
-        let desiredValue;
-
-        if (hasMovableInterval) {
-          const desiredCenterScreen = pointerPositionPx - gesture.pointerOffsetPx;
-          const lowCenter = Math.min(gesture.minCenterScreen, gesture.maxCenterScreen);
-          const highCenter = Math.max(gesture.minCenterScreen, gesture.maxCenterScreen);
-          const clampedCenter = clamp(desiredCenterScreen, lowCenter, highCenter);
-          const centerRatio = (
-            clampedCenter - gesture.minCenterScreen
-          ) / (
-            gesture.maxCenterScreen - gesture.minCenterScreen
-          );
-          const rawValue = gesture.minValue + centerRatio * (
-            gesture.maxValue - gesture.minValue
-          );
-          desiredValue = roundToStep(
-            rawValue,
-            gesture.stepSize,
-            gesture.minValue,
-            gesture.maxValue
-          );
-        } else {
-          const pointerAxisDeltaPx = pointerPositionPx - gesture.startPointerPositionPx;
-          const signedAxisDelta = pointerAxisDeltaPx * gesture.directionFactor;
-          const desiredStepDelta = quantizeStepCount(
-            signedAxisDelta,
-            gesture.pixelsPerStep
-          );
-          desiredValue = roundToStep(
-            gesture.startValue + desiredStepDelta * gesture.stepSize,
-            gesture.stepSize,
-            gesture.minValue,
-            gesture.maxValue
-          );
-        }
-
-        const stepDelta = Math.round(
-          (desiredValue - gesture.currentValue) / gesture.stepSize
-        );
-
-        if (stepDelta === 0) {
-          return;
-        }
-
-        gesture.currentValue = desiredValue;
-        handlersRef.current.onStepAdjustField?.(gesture.fieldName, stepDelta);
-      };
-
       const handleWheel = (event) => {
         const controlZone = event.target.closest(
-          ".figure-wheel-zone, .figure-drag-hotspot"
+          ".figure-wheel-hotspot, .figure-wheel-zone, .figure-drag-hotspot"
         );
 
         if (!controlZone) {
@@ -422,6 +563,7 @@
         const fieldName = controlZone.getAttribute("data-field-name");
         const direction = event.deltaY < 0 ? 1 : -1;
         wheelLockUntilRef.current = Date.now() + WHEEL_LOCK_TTL_MS;
+        lockGlobalWheelScroll();
         handlersRef.current.onAdjustField?.(fieldName, direction);
       };
 
@@ -469,7 +611,7 @@
             event.preventDefault();
           }
 
-          updateDragGesture(event);
+          scheduleDebouncedDragUpdate(event);
         }
       };
 
@@ -479,6 +621,7 @@
         }
 
         if (dragGestureRef.current?.pointerId === event.pointerId) {
+          flushDebouncedDragUpdate(event.pointerId);
           clearActiveDrag();
         }
       };
@@ -493,6 +636,7 @@
       return () => {
         clearPendingDrag();
         clearActiveDrag();
+        clearDebouncedDragUpdate();
         container.removeEventListener("wheel", handleWheel);
         container.removeEventListener("pointerdown", handlePointerDown);
         container.removeEventListener("pointermove", handlePointerMove);
@@ -512,6 +656,33 @@
           dangerouslySetInnerHTML={{ __html: svgMarkup }}
         />
         <div className="figure-interaction-overlay" aria-hidden="true">
+          {wheelHotspots.map((hotspot) => (
+            <div
+              key={hotspot.key}
+              className={`figure-wheel-hotspot ${
+                hotspot.fieldName === visualState.activeFieldName ? "is-active" : ""
+              }`}
+              data-field-name={hotspot.fieldName}
+              onClick={() => onSelectField?.(hotspot.fieldName)}
+              style={{
+                left: `${(hotspot.hitX / scene.viewWidth) * 100}%`,
+                top: `${(hotspot.hitY / scene.viewHeight) * 100}%`,
+                width: `${(hotspot.hitWidth / scene.viewWidth) * 100}%`,
+                height: `${(hotspot.hitHeight / scene.viewHeight) * 100}%`,
+              }}
+            >
+              <span
+                className="figure-wheel-hotspot-pill"
+                aria-hidden="true"
+                style={{
+                  left: `${((hotspot.hintX - hotspot.hitX) / hotspot.hitWidth) * 100}%`,
+                  top: `${((hotspot.hintY - hotspot.hitY) / hotspot.hitHeight) * 100}%`,
+                  width: `${(hotspot.hintWidth / hotspot.hitWidth) * 100}%`,
+                  height: `${(hotspot.hintHeight / hotspot.hitHeight) * 100}%`,
+                }}
+              />
+            </div>
+          ))}
           {dragHotspots.map((hotspot) => (
             <div
               key={hotspot.key}
