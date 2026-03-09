@@ -1,7 +1,7 @@
 (function() {
-  const { BOLT_FIELDS, getThreadedLengthMaxMm } = window;
+  const { BOLT_DIMENSION_FIELDS, getBoltFieldBounds, sanitizeBoltFieldValue } = window;
   const WHEEL_LOCK_TTL_MS = 420;
-  const FIELD_MAP = Object.fromEntries(BOLT_FIELDS.map((field) => [field.name, field]));
+  const FIELD_MAP = Object.fromEntries(BOLT_DIMENSION_FIELDS.map((field) => [field.name, field]));
   const getStepDecimals = (stepSize) => (
     String(stepSize).includes(".")
       ? String(stepSize).split(".")[1].length
@@ -18,7 +18,7 @@
   };
   const stripTerminalPeriod = (rawText) => String(rawText || "").replace(/\.\s*$/, "");
   const buildDraftValues = (spec) => Object.fromEntries(
-    BOLT_FIELDS.map((field) => [field.name, String(spec[field.name] ?? "")])
+    BOLT_DIMENSION_FIELDS.map((field) => [field.name, String(spec[field.name] ?? "")])
   );
   const lockGlobalWheelScroll = (ttlMs = WHEEL_LOCK_TTL_MS) => {
     globalThis.__BOLT_WHEEL_LOCK_UNTIL__ = Date.now() + ttlMs;
@@ -33,6 +33,7 @@
   }) => {
     const panelRef = React.useRef(null);
     const [draftValues, setDraftValues] = React.useState(() => buildDraftValues(spec));
+    const [focusedFieldName, setFocusedFieldName] = React.useState(null);
     const focusedFieldNameRef = React.useRef(null);
     const suppressedBlurFieldNameRef = React.useRef(null);
     const draftValuesRef = React.useRef(draftValues);
@@ -56,7 +57,7 @@
         let didChange = false;
         const nextDraftValues = { ...currentDraftValues };
 
-        BOLT_FIELDS.forEach((field) => {
+        BOLT_DIMENSION_FIELDS.forEach((field) => {
           if (focusedFieldNameRef.current === field.name) {
             return;
           }
@@ -74,27 +75,30 @@
     }, [spec]);
 
     const commitDraftValue = React.useCallback((fieldName) => {
-      const rawValue = String(draftValues[fieldName] ?? "").trim();
+      const assessment = sanitizeBoltFieldValue(spec, fieldName, draftValues[fieldName]);
 
-      if (!rawValue) {
-        setDraftValues((currentDraftValues) => ({
-          ...currentDraftValues,
-          [fieldName]: String(spec[fieldName] ?? ""),
-        }));
+      if (assessment.kind === "empty" || assessment.kind === "non-numeric") {
+        setDraftValues((currentDraftValues) => (
+          currentDraftValues[fieldName] === String(spec[fieldName] ?? "")
+            ? currentDraftValues
+            : {
+              ...currentDraftValues,
+              [fieldName]: String(spec[fieldName] ?? ""),
+            }
+        ));
         return;
       }
 
-      const parsedValue = Number(rawValue);
-
-      if (!Number.isFinite(parsedValue)) {
-        setDraftValues((currentDraftValues) => ({
-          ...currentDraftValues,
-          [fieldName]: String(spec[fieldName] ?? ""),
-        }));
-        return;
-      }
-
-      onFieldChange(fieldName, parsedValue);
+      const committedValueText = String(assessment.sanitizedValue);
+      setDraftValues((currentDraftValues) => (
+        currentDraftValues[fieldName] === committedValueText
+          ? currentDraftValues
+          : {
+            ...currentDraftValues,
+            [fieldName]: committedValueText,
+          }
+      ));
+      onFieldChange(fieldName, assessment.sanitizedValue);
     }, [draftValues, onFieldChange, spec]);
 
     const applySuggestedValue = React.useCallback((fieldName, suggestedValue) => {
@@ -156,10 +160,10 @@
         handlersRef.current.onFieldWheelActivity?.(fieldName);
 
         const rawDraftValue = String(draftValuesRef.current[fieldName] ?? "").trim();
-        const parsedDraftValue = Number(rawDraftValue);
         const currentSpec = specRef.current;
-        const currentValue = Number.isFinite(parsedDraftValue)
-          ? parsedDraftValue
+        const draftAssessment = sanitizeBoltFieldValue(currentSpec, fieldName, rawDraftValue);
+        const currentValue = Number.isFinite(draftAssessment.parsedValue)
+          ? draftAssessment.parsedValue
           : Number(currentSpec[fieldName]);
         const decimals = String(field.step).includes(".")
           ? String(field.step).split(".")[1].length
@@ -168,11 +172,17 @@
         const nextValue = Number(
           (currentValue + direction * field.step).toFixed(decimals)
         );
-        const nextValueText = String(nextValue);
+        const nextAssessment = sanitizeBoltFieldValue(currentSpec, fieldName, nextValue);
+        const nextValueText = Number.isFinite(nextAssessment.sanitizedValue)
+          ? String(nextAssessment.sanitizedValue)
+          : String(currentSpec[fieldName] ?? "");
 
         if (document.activeElement === input) {
           suppressedBlurFieldNameRef.current = fieldName;
           focusedFieldNameRef.current = null;
+          setFocusedFieldName((currentFieldName) => (
+            currentFieldName === fieldName ? null : currentFieldName
+          ));
           input.blur();
         }
 
@@ -184,7 +194,7 @@
               [fieldName]: nextValueText,
             }
         ));
-        handlersRef.current.onFieldChange?.(fieldName, nextValue);
+        handlersRef.current.onFieldChange?.(fieldName, nextAssessment.sanitizedValue);
       };
 
       panel.addEventListener("wheel", handleNativeWheel, {
@@ -208,11 +218,10 @@
           ) : null}
         </div>
         <div className="field-grid">
-          {BOLT_FIELDS.map((field) => {
-            const fieldMin = field.name === "threadedLengthMm" ? 0.5 : field.min;
-            const fieldMax = field.name === "threadedLengthMm"
-              ? getThreadedLengthMaxMm(Number(spec.underHeadLengthMm) || 0)
-              : field.max;
+          {BOLT_DIMENSION_FIELDS.map((field) => {
+            const bounds = getBoltFieldBounds(spec, field.name);
+            const fieldMin = Number.isFinite(bounds.min) ? bounds.min : field.min;
+            const fieldMax = Number.isFinite(bounds.max) ? bounds.max : field.max;
             const fieldLabel = field.unit ? `${field.label} (${field.unit})` : field.label;
             const fieldDiagnostics = diagnosticsByField[field.name] || [];
             const primaryDiagnostic = fieldDiagnostics[0] || null;
@@ -237,6 +246,11 @@
               ? stripTerminalPeriod(primaryDiagnostic.detailSuffix)
               : "";
             const inputId = `bolt-field-${field.name}`;
+            const draftAssessment = sanitizeBoltFieldValue(spec, field.name, draftValues[field.name]);
+            const isRawInvalid = (
+              focusedFieldName === field.name &&
+              !draftAssessment.isValid
+            );
 
             return (
               <div className="field-row" key={field.name}>
@@ -312,7 +326,7 @@
                 </div>
                 <input
                   id={inputId}
-                  className="field-input"
+                  className={`field-input ${isRawInvalid ? "is-invalid-raw" : ""}`}
                   data-field-name={field.name}
                   type="number"
                   min={fieldMin}
@@ -321,6 +335,7 @@
                   value={draftValues[field.name] ?? ""}
                   onFocus={() => {
                     focusedFieldNameRef.current = field.name;
+                    setFocusedFieldName(field.name);
                   }}
                   onBlur={() => {
                     if (suppressedBlurFieldNameRef.current === field.name) {
@@ -330,12 +345,20 @@
                         focusedFieldNameRef.current = null;
                       }
 
+                      setFocusedFieldName((currentFieldName) => (
+                        currentFieldName === field.name ? null : currentFieldName
+                      ));
+
                       return;
                     }
 
                     if (focusedFieldNameRef.current === field.name) {
                       focusedFieldNameRef.current = null;
                     }
+
+                    setFocusedFieldName((currentFieldName) => (
+                      currentFieldName === field.name ? null : currentFieldName
+                    ));
 
                     commitDraftValue(field.name);
                   }}
@@ -359,6 +382,9 @@
 
                     if (event.key === "Escape") {
                       focusedFieldNameRef.current = null;
+                      setFocusedFieldName((currentFieldName) => (
+                        currentFieldName === field.name ? null : currentFieldName
+                      ));
                       setDraftValues((currentDraftValues) => ({
                         ...currentDraftValues,
                         [field.name]: String(spec[field.name] ?? ""),

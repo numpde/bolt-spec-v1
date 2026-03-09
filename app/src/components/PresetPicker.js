@@ -1,11 +1,11 @@
 (function() {
-  const { BOLT_PRESETS, CatalogList } = window;
+  const { BOLT_PRESETS, CatalogList, formatBoltCatalogMeta } = window;
 
   const PresetPickerImpl = ({ selectedPreset, onSelect }) => {
     const items = Object.entries(BOLT_PRESETS).map(([presetKey, preset]) => ({
       key: presetKey,
       title: preset.displayName || preset.presetName,
-      meta: `${preset.presetName} · pitch ${Number(preset.pitchMm).toFixed(1)} mm`,
+      meta: formatBoltCatalogMeta(preset, preset.presetName),
       onClick: () => onSelect(presetKey),
     }));
 

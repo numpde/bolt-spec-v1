@@ -4,9 +4,12 @@
     getBoltPresets,
     getDefaultPresetKey,
     cloneBoltPreset,
+    getPresetEditableOverrides,
+    getPresetSpecifiedFieldNames,
     normalizeBoltSpec,
-    getThreadedLengthMaxMm,
     BOLT_FIELDS,
+    getBoltFieldBounds,
+    sanitizeBoltFieldValue,
     downloadCheckpointFigure,
     normalizeCheckpointState,
     buildCheckpointUrl,
@@ -104,7 +107,7 @@
     return (
       normalizedPresetEntries.find(([presetKey, normalizedPreset]) => (
         cloneBoltPreset(presetKey).standardProfileKey === standardProfileKey &&
-        EDITABLE_FIELD_NAMES.every((fieldName) => (
+        getPresetSpecifiedFieldNames(presetKey).every((fieldName) => (
           normalizedDraftSpec[fieldName] === normalizedPreset[fieldName]
         ))
       ))?.[0] || null
@@ -170,36 +173,6 @@
       grouped[diagnostic.fieldName] = bucket;
       return grouped;
     }, {}), [diagnostics]);
-    const getFieldBounds = React.useCallback((draftLikeSpec, fieldName) => {
-      const field = fieldMap[fieldName];
-
-      if (!field) {
-        return { min: -Infinity, max: Infinity };
-      }
-
-      const normalizedSpec = normalizeBoltSpec(draftLikeSpec);
-      let min = Number.isFinite(field.min) ? field.min : -Infinity;
-      let max = Number.isFinite(field.max) ? field.max : Infinity;
-
-      if (fieldName === "threadedLengthMm") {
-        max = Math.min(max, getThreadedLengthMaxMm(normalizedSpec.underHeadLengthMm));
-      } else if (fieldName === "socketDepthMm") {
-        max = Math.min(max, normalizedSpec.headHeightMm);
-      } else if (fieldName === "tipChamferMm") {
-        max = Math.min(
-          max,
-          Math.min(
-            normalizedSpec.underHeadLengthMm * 0.33,
-            normalizedSpec.nominalDiameterMm * 0.5
-          )
-        );
-      } else if (fieldName === "headDiameterMm") {
-        min = Math.max(min, normalizedSpec.nominalDiameterMm + 0.2);
-      }
-
-      return { min, max };
-    }, []);
-
     const coerceDraftSpec = React.useCallback((nextDraftSpec, nextPresetName = presetName) => {
       const checkpointState = normalizeCheckpointState({
         presetName: nextPresetName,
@@ -339,11 +312,15 @@
       const currentCheckpoint = buildCurrentAppState();
       flushPendingHistorySync(currentCheckpoint);
       const nextPreset = cloneBoltPreset(nextPresetName);
+      const nextDraftSpec = coerceDraftSpec({
+        ...draftSpec,
+        ...getPresetEditableOverrides(nextPreset),
+      }, nextPresetName);
 
       const nextCheckpoint = normalizeCheckpointState({
         presetName: nextPresetName,
         standardProfileKey: nextPreset.standardProfileKey,
-        draftSpec: nextPreset,
+        draftSpec: nextDraftSpec,
       });
 
       commitCheckpointToHistory("push", nextCheckpoint);
@@ -352,6 +329,8 @@
       applyAppState,
       buildCurrentAppState,
       commitCheckpointToHistory,
+      coerceDraftSpec,
+      draftSpec,
       flushPendingHistorySync,
     ]);
 
@@ -372,9 +351,15 @@
 
     const handleFieldChange = React.useCallback((fieldName, nextValue) => {
       setDraftSpec((current) => {
+        const nextValueAssessment = sanitizeBoltFieldValue(current, fieldName, nextValue);
+
+        if (!Number.isFinite(nextValueAssessment.sanitizedValue)) {
+          return current;
+        }
+
         const nextDraftSpec = coerceDraftSpec({
           ...current,
-          [fieldName]: nextValue,
+          [fieldName]: nextValueAssessment.sanitizedValue,
         });
 
         return editableSpecDidChange(current, nextDraftSpec)
@@ -396,7 +381,7 @@
           ? currentValue
           : Number(field.min ?? 0);
         const nextValue = safeCurrentValue + stepDelta * field.step;
-        const bounds = getFieldBounds(current, fieldName);
+        const bounds = getBoltFieldBounds(current, fieldName);
         const clampedValue = Math.min(
           Math.max(nextValue, bounds.min ?? nextValue),
           bounds.max ?? nextValue
@@ -443,7 +428,7 @@
 
     const activeField = activeFieldName ? fieldMap[activeFieldName] : null;
     const activeFieldBounds = activeFieldName
-      ? getFieldBounds(draftSpec, activeFieldName)
+      ? getBoltFieldBounds(draftSpec, activeFieldName)
       : { min: 0, max: 0 };
     const activeFieldDiagnostics = React.useMemo(() => {
       if (!activeFieldName) {

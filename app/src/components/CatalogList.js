@@ -111,7 +111,7 @@
               )}
               {item.onActionClick ? (
                 <button
-                  className="catalog-list-item-action"
+                  className="panel-toolbar-button panel-toolbar-icon-button catalog-list-item-action"
                   type="button"
                   aria-label={item.actionLabel}
                   title={item.actionLabel}

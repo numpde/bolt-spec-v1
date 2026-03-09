@@ -195,6 +195,7 @@
     frameWidth = null,
     frameHeight = null,
     frameMinX = null,
+    textScale = 1,
   }) => {
     const {
       spec,
@@ -215,6 +216,12 @@
     const svgViewMinX = frameMinX ?? viewMinX;
     const svgViewWidth = frameWidth || viewWidth;
     const svgViewHeight = frameHeight || viewHeight;
+    const mobileTextOverride = textScale !== 1
+      ? `
+        .figure-text { font-size: ${(11 * textScale).toFixed(2)}px; }
+        .figure-caption { font-size: ${(10 * textScale).toFixed(2)}px; }
+      `
+      : "";
 
     return (
       <svg
@@ -225,6 +232,7 @@
         aria-label={getBoltFigureAriaLabel(showTopView)}
       >
         <style>{FIGURE_SVG_STYLE}</style>
+        {mobileTextOverride ? <style>{mobileTextOverride}</style> : null}
         <rect x={svgViewMinX} y="0" width={svgViewWidth} height={svgViewHeight} fill="#f7f1e8" />
         <line className="figure-centerline" x1={centerline.x1} y1={centerline.y1} x2={centerline.x2} y2={centerline.y2} />
         <path className="figure-line" d={sideOutlinePath} />
@@ -1863,6 +1871,7 @@
 
     const viewportSceneWidth = isMobileViewport ? renderFrame.sideViewportWidth : renderFrame.viewWidth;
     const contentWidthPercent = (renderFrame.viewWidth / viewportSceneWidth) * 100;
+    const figureTextScale = isMobileViewport ? 1.22 : 1;
     const handleTopViewToggle = () => {
       const viewport = scrollViewportRef.current;
       const nextShowTopView = isMobileViewport && viewport
@@ -1961,6 +1970,7 @@
                 frameMinX={renderFrame.viewMinX}
                 frameWidth={renderFrame.viewWidth}
                 frameHeight={renderFrame.viewHeight}
+                textScale={figureTextScale}
               />
             </div>
             <div

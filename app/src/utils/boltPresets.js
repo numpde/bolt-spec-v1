@@ -9,62 +9,24 @@
     Object.assign(root, api);
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function() {
-  const BUILTIN_PRESET_CATALOG = {
-    defaultPresetKey: "m5",
-    sizeFamilyPresetKeys: ["m4", "m5", "m6"],
-    presets: {
-      m4: {
-        displayName: "Coarse M4",
-        presetName: "M4",
-        standardProfileKey: "iso-metric-262",
-        nominalDiameterMm: 4.0,
-        pitchMm: 0.7,
-        underHeadLengthMm: 18.0,
-        threadedLengthMm: 13.0,
-        headDiameterMm: 6.0,
-        headHeightMm: 3.0,
-        tipChamferMm: 0.4,
-        socketDepthMm: 3.0,
-        driveLabel: "T25",
-      },
-      m5: {
-        displayName: "Coarse M5",
-        presetName: "M5",
-        standardProfileKey: "iso-metric-262",
-        nominalDiameterMm: 5.0,
-        pitchMm: 0.8,
-        underHeadLengthMm: 18.0,
-        threadedLengthMm: 13.0,
-        headDiameterMm: 7.0,
-        headHeightMm: 3.5,
-        tipChamferMm: 0.5,
-        socketDepthMm: 3.0,
-        driveLabel: "T25",
-      },
-      m6: {
-        displayName: "Coarse M6",
-        presetName: "M6",
-        standardProfileKey: "iso-metric-262",
-        nominalDiameterMm: 6.0,
-        pitchMm: 1.0,
-        underHeadLengthMm: 18.0,
-        threadedLengthMm: 13.0,
-        headDiameterMm: 8.4,
-        headHeightMm: 4.2,
-        tipChamferMm: 0.6,
-        socketDepthMm: 3.0,
-        driveLabel: "T25",
-      },
-    },
-  };
   const PRESET_CATALOG_BROWSER_URL = "static/bolt-presets.yaml";
   const PRESET_CATALOG_NODE_PATH = "../../static/bolt-presets.yaml";
   const PRESET_CATALOG_STATE = {
-    defaultPresetKey: BUILTIN_PRESET_CATALOG.defaultPresetKey,
+    defaultPresetKey: null,
   };
   const BOLT_PRESETS = {};
   const SIZE_FAMILY_PRESET_KEYS = [];
   let cachedCatalogPromise = null;
+  const DEFAULT_EDITABLE_BOLT_SPEC = {
+    nominalDiameterMm: 5.0,
+    pitchMm: 0.8,
+    underHeadLengthMm: 18.0,
+    threadedLengthMm: 13.0,
+    headDiameterMm: 7.0,
+    headHeightMm: 3.5,
+    tipChamferMm: 0.5,
+    socketDepthMm: 3.0,
+  };
 
   const BOLT_FIELDS = [
     {
@@ -140,6 +102,7 @@
       step: 0.1,
     },
   ];
+  const BOLT_DIMENSION_FIELDS = BOLT_FIELDS.filter((field) => field.name !== "tipChamferMm");
 
   const SIZE_FAMILY_FIELD_NAMES = [
     "nominalDiameterMm",
@@ -340,8 +303,18 @@
     return catalog;
   };
 
-  const getDefaultPresetKey = () => PRESET_CATALOG_STATE.defaultPresetKey;
+  const ensurePresetCatalogLoaded = () => {
+    if (!PRESET_CATALOG_STATE.defaultPresetKey || !Object.keys(BOLT_PRESETS).length) {
+      throw new Error("Bolt preset catalog has not been loaded yet");
+    }
+  };
+
+  const getDefaultPresetKey = () => {
+    ensurePresetCatalogLoaded();
+    return PRESET_CATALOG_STATE.defaultPresetKey;
+  };
   const cloneBoltPreset = (presetKey) => {
+    ensurePresetCatalogLoaded();
     const preset = BOLT_PRESETS[presetKey];
 
     if (!preset) {
@@ -350,8 +323,54 @@
 
     return cloneDeep(preset);
   };
-  const getBoltPresets = () => BOLT_PRESETS;
-  const getSizeFamilyPresetKeys = () => SIZE_FAMILY_PRESET_KEYS;
+  const getBoltPresets = () => {
+    ensurePresetCatalogLoaded();
+    return BOLT_PRESETS;
+  };
+  const getSizeFamilyPresetKeys = () => {
+    ensurePresetCatalogLoaded();
+    return SIZE_FAMILY_PRESET_KEYS;
+  };
+  const getPresetEditableOverrides = (presetLike) => Object.fromEntries(
+    BOLT_FIELDS.flatMap((field) => (
+      presetLike?.[field.name] === undefined
+        ? []
+        : [[field.name, presetLike[field.name]]]
+    ))
+  );
+  const getPresetSpecifiedFieldNames = (presetKey) => (
+    Object.keys(getPresetEditableOverrides(BOLT_PRESETS[presetKey] || {}))
+  );
+
+  const formatBoltSizeTag = (specLike, fallbackPresetName = "") => {
+    const diameter = Number(specLike?.nominalDiameterMm);
+    const pitch = Number(specLike?.pitchMm);
+
+    if (!Number.isFinite(diameter)) {
+      return String(fallbackPresetName || "").toUpperCase();
+    }
+
+    const isIntegerDiameter = Math.abs(diameter - Math.round(diameter)) < 0.001;
+    const diameterDisplay = diameter.toFixed(1).replace(/\.0$/, "");
+    const pitchSuffix = Number.isFinite(pitch)
+      ? ` (${pitch.toFixed(1)} mm)`
+      : "";
+
+    return isIntegerDiameter
+      ? `M${Math.round(diameter)}${pitchSuffix}`
+      : `⌀${diameterDisplay}${pitchSuffix}`;
+  };
+
+  const formatBoltCatalogMeta = (specLike, fallbackPresetName = "") => {
+    const sizeTag = formatBoltSizeTag(specLike, fallbackPresetName);
+    const length = Number(specLike?.underHeadLengthMm);
+
+    if (!Number.isFinite(length)) {
+      return sizeTag;
+    }
+
+    return `${sizeTag} · ${length.toFixed(1)} mm`;
+  };
 
   const applySizeFamilyToDraftSpec = (draftSpec, presetKey) => {
     const preset = BOLT_PRESETS[presetKey];
@@ -363,7 +382,9 @@
     return {
       ...draftSpec,
       ...Object.fromEntries(
-        SIZE_FAMILY_FIELD_NAMES.map((fieldName) => [fieldName, preset[fieldName]])
+        SIZE_FAMILY_FIELD_NAMES.flatMap((fieldName) => (
+          preset[fieldName] === undefined ? [] : [[fieldName, preset[fieldName]]]
+        ))
       ),
     };
   };
@@ -414,17 +435,21 @@
     return cachedCatalogPromise;
   };
 
-  applyPresetCatalog(BUILTIN_PRESET_CATALOG);
-
   return {
     BOLT_PRESETS,
     BOLT_FIELDS,
+    BOLT_DIMENSION_FIELDS,
     SIZE_FAMILY_PRESET_KEYS,
     getBoltPresets,
     getSizeFamilyPresetKeys,
+    DEFAULT_EDITABLE_BOLT_SPEC,
+    getPresetEditableOverrides,
+    getPresetSpecifiedFieldNames,
     getDefaultPresetKey,
     cloneBoltPreset,
     applySizeFamilyToDraftSpec,
+    formatBoltSizeTag,
+    formatBoltCatalogMeta,
     parseSimpleYaml,
     loadBoltPresetCatalog,
     loadBoltPresetCatalogSync,

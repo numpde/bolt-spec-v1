@@ -3,6 +3,8 @@
     normalizeCheckpointState,
     buildCheckpointUrl,
     CatalogList,
+    formatBoltSizeTag,
+    formatBoltCatalogMeta,
   } = window;
 
   const STORAGE_KEY = "bolt-liked-bolts-v1";
@@ -68,14 +70,16 @@
   };
 
   const defaultNameForCheckpoint = (checkpoint) => (
-    `${checkpoint.presetName.toUpperCase()} ${checkpoint.draftSpec.underHeadLengthMm.toFixed(1)} mm`
+    `${formatBoltSizeTag(checkpoint.draftSpec, checkpoint.presetName)} ${checkpoint.draftSpec.underHeadLengthMm.toFixed(1)} mm`
+  );
+
+  const resolveEntryName = (entry) => (
+    entry.name || defaultNameForCheckpoint(entry.checkpoint)
   );
 
   const formatEntryMeta = (entry) => {
     const checkpoint = entry.checkpoint;
-    const length = checkpoint.draftSpec.underHeadLengthMm.toFixed(1);
-
-    return `${checkpoint.presetName.toUpperCase()} · ${length} mm`;
+    return formatBoltCatalogMeta(checkpoint.draftSpec, checkpoint.presetName);
   };
 
   const deleteIcon = (
@@ -88,9 +92,48 @@
     </svg>
   );
 
+  const LikedBoltForm = React.memo(({
+    syncedName = null,
+    onSubmitName,
+  }) => {
+    const [nameDraft, setNameDraft] = React.useState("");
+
+    React.useEffect(() => {
+      if (typeof syncedName !== "string") {
+        return;
+      }
+
+      setNameDraft((currentNameDraft) => (
+        currentNameDraft === syncedName ? currentNameDraft : syncedName
+      ));
+    }, [syncedName]);
+
+    const handleSubmit = React.useCallback((event) => {
+      event.preventDefault();
+      onSubmitName?.(nameDraft);
+    }, [nameDraft, onSubmitName]);
+
+    return (
+      <form className="liked-bolt-form" onSubmit={handleSubmit}>
+        <input
+          className="liked-bolt-name-input"
+          type="text"
+          placeholder="Name this bolt"
+          value={nameDraft}
+          onChange={(event) => setNameDraft(event.target.value)}
+        />
+        <button
+          className="liked-bolt-button"
+          type="submit"
+        >
+          I like it!
+        </button>
+      </form>
+    );
+  });
+
   const LikedBoltsCardImpl = ({ currentCheckpoint, onSelectCheckpoint }) => {
     const [likedEntries, setLikedEntries] = React.useState(() => readLikedBolts());
-    const [nameDraft, setNameDraft] = React.useState("");
 
     React.useEffect(() => {
       writeLikedBolts(likedEntries);
@@ -107,24 +150,24 @@
     const currentMatchedEntry = React.useMemo(() => (
       likedEntries.find((entry) => entry.id === currentEntryId) || null
     ), [currentEntryId, likedEntries]);
-
-    React.useEffect(() => {
+    const syncedName = React.useMemo(() => {
       if (!currentMatchedEntry) {
-        return;
+        return null;
       }
 
-      const checkpoint = normalizeCheckpointState(currentMatchedEntry.checkpoint);
-      const resolvedName = currentMatchedEntry.name || defaultNameForCheckpoint(checkpoint);
-
-      setNameDraft((currentNameDraft) => (
-        currentNameDraft === resolvedName ? currentNameDraft : resolvedName
-      ));
+      return resolveEntryName({
+        ...currentMatchedEntry,
+        checkpoint: normalizeCheckpointState(currentMatchedEntry.checkpoint),
+      });
     }, [currentMatchedEntry]);
 
     const decoratedEntries = React.useMemo(() => (
       likedEntries.map((entry) => {
         const checkpoint = normalizeCheckpointState(entry.checkpoint);
-        const resolvedName = entry.name || defaultNameForCheckpoint(checkpoint);
+        const resolvedName = resolveEntryName({
+          ...entry,
+          checkpoint,
+        });
 
         return {
           ...entry,
@@ -142,12 +185,13 @@
       })
     ), [handleDeleteEntry, likedEntries, onSelectCheckpoint]);
 
-    const handleLikeCurrent = React.useCallback(() => {
+    const handleLikeCurrent = React.useCallback((rawNameDraft = "") => {
       const checkpoint = normalizeCheckpointState(currentCheckpoint);
       const id = buildEntryId(checkpoint);
+      const resolvedName = String(rawNameDraft).trim() || defaultNameForCheckpoint(checkpoint);
       const nextEntry = {
         id,
-        name: nameDraft.trim() || defaultNameForCheckpoint(checkpoint),
+        name: resolvedName,
         createdAt: new Date().toISOString(),
         checkpoint,
       };
@@ -156,32 +200,15 @@
         nextEntry,
         ...currentEntries.filter((entry) => entry.id !== id),
       ].slice(0, MAX_LIKED_BOLTS));
-      setNameDraft("");
-    }, [currentCheckpoint, nameDraft]);
-
-    const handleLikeSubmit = React.useCallback((event) => {
-      event.preventDefault();
-      handleLikeCurrent();
-    }, [handleLikeCurrent]);
+    }, [currentCheckpoint]);
 
     return (
       <section className="panel-card">
         <p className="eyebrow">My picks</p>
-        <form className="liked-bolt-form" onSubmit={handleLikeSubmit}>
-          <input
-            className="liked-bolt-name-input"
-            type="text"
-            placeholder="Name this bolt"
-            value={nameDraft}
-            onChange={(event) => setNameDraft(event.target.value)}
-          />
-          <button
-            className="liked-bolt-button"
-            type="submit"
-          >
-            I like it!
-          </button>
-        </form>
+        <LikedBoltForm
+          syncedName={syncedName}
+          onSubmitName={handleLikeCurrent}
+        />
 
         <CatalogList
           ariaLabel="My picks"

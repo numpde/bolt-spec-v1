@@ -18,6 +18,7 @@
   const {
     BOLT_FIELDS,
     cloneBoltPreset,
+    DEFAULT_EDITABLE_BOLT_SPEC,
     getBoltPresets,
     getDefaultPresetKey,
   } = presetApi;
@@ -43,6 +44,7 @@
 
   const coerceDraftSpec = (presetKey, draftSpec = {}) => {
     const normalizedSpec = normalizeBoltSpec({
+      ...DEFAULT_EDITABLE_BOLT_SPEC,
       ...cloneBoltPreset(presetKey),
       ...draftSpec,
     });
