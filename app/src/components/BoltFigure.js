@@ -22,6 +22,7 @@
   const HIGH_CHURN_COOLDOWN_MS = 140;
   const WHEEL_ACTIVE_COOLDOWN_MS = 220;
   const COPY_FLASH_MS = 620;
+  const CONSTRAINT_FLASH_COOLDOWN_MS = 520;
   const MOBILE_MEDIA_QUERY = "(max-width: 560px)";
   const MOBILE_SCROLL_SNAP_DELAY_MS = 140;
   const MOBILE_SWIPE_DISCOVERY_STORAGE_KEY = "bolt-mobile-swipe-discovered-v1";
@@ -63,7 +64,7 @@
   );
 
   const getHotspotScreenRect = (hotspot, scene, contentRect) => ({
-    left: (hotspot.x / scene.viewWidth) * contentRect.width,
+    left: ((hotspot.x - (scene.viewMinX || 0)) / scene.viewWidth) * contentRect.width,
     top: (hotspot.y / scene.viewHeight) * contentRect.height,
     width: (hotspot.width / scene.viewWidth) * contentRect.width,
     height: (hotspot.height / scene.viewHeight) * contentRect.height,
@@ -72,7 +73,7 @@
   const projectScenePositionToScreen = (scenePosition, axis, scene, contentRect) => (
     axis === "vertical"
       ? contentRect.top + (scenePosition / scene.viewHeight) * contentRect.height
-      : contentRect.left + (scenePosition / scene.viewWidth) * contentRect.width
+      : contentRect.left + ((scenePosition - (scene.viewMinX || 0)) / scene.viewWidth) * contentRect.width
   );
 
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -145,9 +146,15 @@
     return { min, max };
   };
 
-  const BoltFigureSvg = React.memo(({ scene, frameWidth = null, frameHeight = null }) => {
+  const BoltFigureSvg = React.memo(({
+    scene,
+    frameWidth = null,
+    frameHeight = null,
+    frameMinX = null,
+  }) => {
     const {
       spec,
+      viewMinX,
       viewWidth,
       viewHeight,
       showTopView,
@@ -161,6 +168,7 @@
       threadLines,
       dimensions,
     } = scene;
+    const svgViewMinX = frameMinX ?? viewMinX;
     const svgViewWidth = frameWidth || viewWidth;
     const svgViewHeight = frameHeight || viewHeight;
 
@@ -168,12 +176,12 @@
       <svg
         className="figure-svg"
         xmlns="http://www.w3.org/2000/svg"
-        viewBox={`0 0 ${svgViewWidth} ${svgViewHeight}`}
+        viewBox={`${svgViewMinX} 0 ${svgViewWidth} ${svgViewHeight}`}
         role="img"
         aria-label={getBoltFigureAriaLabel(showTopView)}
       >
         <style>{FIGURE_SVG_STYLE}</style>
-        <rect x="0" y="0" width={svgViewWidth} height={svgViewHeight} fill="#f7f1e8" />
+        <rect x={svgViewMinX} y="0" width={svgViewWidth} height={svgViewHeight} fill="#f7f1e8" />
         <line className="figure-centerline" x1={centerline.x1} y1={centerline.y1} x2={centerline.x2} y2={centerline.y2} />
         <path className="figure-line" d={sideOutlinePath} />
         {threadLines.top.map((line, index) => (
@@ -280,8 +288,8 @@
     const churnCooldownTimerRef = React.useRef(null);
     const wheelActiveTimerRef = React.useRef(null);
     const copyFlashTimerRef = React.useRef(null);
+    const lastConstraintFlashMsRef = React.useRef(-Infinity);
     const mobileScrollTimerRef = React.useRef(null);
-    const mobileLayoutSyncFrameRef = React.useRef(null);
     const programmaticScrollRef = React.useRef(null);
     const lastVisualCommitMsRef = React.useRef(-Infinity);
     const latestVisualStateRef = React.useRef({
@@ -302,10 +310,11 @@
     const [activeInteractionFocus, setActiveInteractionFocus] = React.useState(null);
     const [activeDragHotspotKey, setActiveDragHotspotKey] = React.useState(null);
     const [activeDragOverlayRect, setActiveDragOverlayRect] = React.useState(null);
-    const [activeDragDebug, setActiveDragDebug] = React.useState(null);
     const [frozenDragFrame, setFrozenDragFrame] = React.useState(null);
+    const [isMobileDragScrollLocked, setIsMobileDragScrollLocked] = React.useState(false);
     const [activeWheelFieldName, setActiveWheelFieldName] = React.useState(null);
     const [isCopyFlashing, setIsCopyFlashing] = React.useState(false);
+    const [constraintFlashNonce, setConstraintFlashNonce] = React.useState(0);
     const [isMobileViewport, setIsMobileViewport] = React.useState(() => (
       typeof window !== "undefined" && window.matchMedia
         ? window.matchMedia(MOBILE_MEDIA_QUERY).matches
@@ -326,9 +335,11 @@
       [sceneOptions, visualState.spec]
     );
     const renderFrame = frozenDragFrame || {
+      viewMinX: scene.viewMinX,
       viewWidth: scene.viewWidth,
       viewHeight: scene.viewHeight,
       sideViewportWidth: scene.sideViewportWidth,
+      sideFramedScrollLeft: scene.sideFramedScrollLeft,
     };
     const dragHotspots = React.useMemo(() => buildDragHotspots(scene), [scene]);
     const wheelHotspots = React.useMemo(() => buildWheelHotspots(scene), [scene]);
@@ -481,10 +492,6 @@
       if (mobileScrollTimerRef.current != null) {
         window.clearTimeout(mobileScrollTimerRef.current);
       }
-
-      if (mobileLayoutSyncFrameRef.current != null) {
-        window.cancelAnimationFrame(mobileLayoutSyncFrameRef.current);
-      }
     }, []);
 
     React.useEffect(() => {
@@ -531,6 +538,17 @@
       }, WHEEL_ACTIVE_COOLDOWN_MS);
     }, []);
 
+    const triggerConstraintFlash = React.useCallback(() => {
+      const now = performance.now();
+
+      if (now - lastConstraintFlashMsRef.current < CONSTRAINT_FLASH_COOLDOWN_MS) {
+        return;
+      }
+
+      lastConstraintFlashMsRef.current = now;
+      setConstraintFlashNonce((currentNonce) => currentNonce + 1);
+    }, []);
+
     React.useEffect(() => {
       sceneRef.current = scene;
       dragHotspotsRef.current = dragHotspots;
@@ -558,13 +576,24 @@
 
     const getViewportMaxScrollLeft = React.useCallback(() => {
       const viewport = scrollViewportRef.current;
+      const scrollFrame = frozenDragFrame || scene;
 
       if (!viewport) {
-        return scene.sideFramedScrollLeft;
+        return scrollFrame.sideFramedScrollLeft;
+      }
+
+      if (isMobileViewportRef.current) {
+        if (!scrollFrame.sideViewportWidth) {
+          return 0;
+        }
+
+        return viewport.clientWidth * (
+          scrollFrame.sideFramedScrollLeft / scrollFrame.sideViewportWidth
+        );
       }
 
       return Math.max(0, viewport.scrollWidth - viewport.clientWidth);
-    }, [scene.sideFramedScrollLeft]);
+    }, [frozenDragFrame, scene]);
 
     const getScrollTargetForViewState = React.useCallback((nextShowTopView) => (
       nextShowTopView ? 0 : getViewportMaxScrollLeft()
@@ -622,35 +651,34 @@
       }
     }, [getScrollTargetForViewState, onSetTopView]);
 
-    React.useEffect(() => {
+    const syncViewportToViewStateImmediately = React.useCallback((nextShowTopView) => {
+      if (!isMobileViewportRef.current || programmaticScrollRef.current) {
+        return;
+      }
+
+      const viewport = scrollViewportRef.current;
+
+      if (!viewport) {
+        return;
+      }
+
+      const targetLeft = getScrollTargetForViewState(nextShowTopView);
+
+      if (Math.abs(viewport.scrollLeft - targetLeft) <= 1) {
+        return;
+      }
+
+      viewport.scrollLeft = targetLeft;
+    }, [getScrollTargetForViewState]);
+
+    React.useLayoutEffect(() => {
       if (!isMobileViewport) {
         return undefined;
       }
 
-      if (programmaticScrollRef.current) {
-        return undefined;
-      }
-
-      if (mobileLayoutSyncFrameRef.current != null) {
-        window.cancelAnimationFrame(mobileLayoutSyncFrameRef.current);
-      }
-
-      mobileLayoutSyncFrameRef.current = window.requestAnimationFrame(() => {
-        mobileLayoutSyncFrameRef.current = null;
-        requestViewState(showTopView, {
-          behavior: "auto",
-          source: "layout",
-          syncState: false,
-        });
-      });
-
-      return () => {
-        if (mobileLayoutSyncFrameRef.current != null) {
-          window.cancelAnimationFrame(mobileLayoutSyncFrameRef.current);
-          mobileLayoutSyncFrameRef.current = null;
-        }
-      };
-    }, [isMobileViewport, requestViewState, scene.sideFramedScrollLeft, showTopView]);
+      syncViewportToViewStateImmediately(showTopView);
+      return undefined;
+    }, [isMobileViewport, scene.sideFramedScrollLeft, showTopView, syncViewportToViewStateImmediately]);
 
     React.useEffect(() => {
       if (
@@ -677,11 +705,7 @@
 
         rafId = window.requestAnimationFrame(() => {
           rafId = null;
-          requestViewState(showTopViewRef.current, {
-            behavior: "auto",
-            source: "layout",
-            syncState: false,
-          });
+          syncViewportToViewStateImmediately(showTopViewRef.current);
         });
       };
 
@@ -699,7 +723,7 @@
           window.cancelAnimationFrame(rafId);
         }
       };
-    }, [isMobileViewport, requestViewState]);
+    }, [isMobileViewport, syncViewportToViewStateImmediately]);
 
     React.useEffect(() => {
       if (!isMobileViewport || !scrollViewportRef.current) {
@@ -877,8 +901,8 @@
 
         dragPendingRef.current = null;
         setActiveDragOverlayRect(null);
-        setActiveDragDebug(null);
         setFrozenDragFrame(null);
+        setIsMobileDragScrollLocked(false);
       };
 
       const clearDebouncedDragUpdate = () => {
@@ -898,12 +922,18 @@
           gesture.maxCenterScreen - gesture.minCenterScreen
         ) > 0.5;
         let desiredValue;
+        let hitConstraint = false;
+        let constraintSide = null;
 
         if (hasMovableInterval) {
           const desiredCenterScreen = pointerPositionPx - gesture.pointerOffsetPx;
           const lowCenter = Math.min(gesture.minCenterScreen, gesture.maxCenterScreen);
           const highCenter = Math.max(gesture.minCenterScreen, gesture.maxCenterScreen);
           const clampedCenter = clamp(desiredCenterScreen, lowCenter, highCenter);
+          hitConstraint = Math.abs(desiredCenterScreen - clampedCenter) > 0.5;
+          if (hitConstraint) {
+            constraintSide = desiredCenterScreen < lowCenter ? "min" : "max";
+          }
           const nearestSample = (gesture.centerSamples || []).reduce((best, sample) => {
             if (!best) {
               return sample;
@@ -930,8 +960,16 @@
             signedAxisDelta,
             gesture.pixelsPerStep
           );
+          const unclampedValue = gesture.startValue + desiredStepDelta * gesture.stepSize;
+          hitConstraint = (
+            unclampedValue < gesture.minValue ||
+            unclampedValue > gesture.maxValue
+          );
+          if (hitConstraint) {
+            constraintSide = unclampedValue < gesture.minValue ? "min" : "max";
+          }
           desiredValue = roundToStep(
-            gesture.startValue + desiredStepDelta * gesture.stepSize,
+            unclampedValue,
             gesture.stepSize,
             gesture.minValue,
             gesture.maxValue
@@ -943,12 +981,24 @@
         );
 
         if (stepDelta === 0) {
+          const isIllegalMove = (
+            constraintSide != null &&
+            gesture.lastIllegalConstraintSide !== constraintSide
+          );
+
+          if (isIllegalMove) {
+            triggerConstraintFlash();
+            gesture.lastIllegalConstraintSide = constraintSide;
+          }
+
           appendDragTraceEvent("commit:no-step", {
             pointerPositionPx: Number(pointerPositionPx.toFixed(2)),
             currentValue: gesture.currentValue,
           });
           return;
         }
+
+        gesture.lastIllegalConstraintSide = null;
 
         markHighChurn({
           type: "drag",
@@ -961,10 +1011,6 @@
           stepDelta,
           usesVirtualOverlay: gesture.usesVirtualOverlay,
         });
-        setActiveDragDebug((current) => current ? {
-          ...current,
-          currentValue: desiredValue,
-        } : current);
         handlersRef.current.onStepAdjustField?.(gesture.fieldName, stepDelta);
       };
 
@@ -1020,8 +1066,8 @@
         clearDebouncedDragUpdate();
         setActiveDragHotspotKey(null);
         setActiveDragOverlayRect(null);
-        setActiveDragDebug(null);
         setFrozenDragFrame(null);
+        setIsMobileDragScrollLocked(false);
 
         if (dragGestureRef.current?.pointerId != null) {
           releaseCapturedPointer(dragGestureRef.current.pointerId);
@@ -1059,6 +1105,7 @@
           centerSamples: pending.centerSamples,
           minCenterScreen: pending.minCenterScreen,
           maxCenterScreen: pending.maxCenterScreen,
+          lastIllegalConstraintSide: null,
           overlayRect: pending.overlayRect,
           usesVirtualOverlay: pending.usesVirtualOverlay,
           crossCenterScreen: pending.crossCenterScreen,
@@ -1073,26 +1120,14 @@
           usesVirtualOverlay: pending.usesVirtualOverlay,
         });
         setFrozenDragFrame({
+          viewMinX: sceneRef.current.viewMinX,
           viewWidth: sceneRef.current.viewWidth,
           viewHeight: sceneRef.current.viewHeight,
           sideViewportWidth: sceneRef.current.sideViewportWidth,
+          sideFramedScrollLeft: sceneRef.current.sideFramedScrollLeft,
         });
         setActiveDragHotspotKey(pending.hotspotKey);
         setActiveDragOverlayRect(pending.usesVirtualOverlay ? pending.overlayRect : null);
-        setActiveDragDebug({
-          hotspotKey: pending.hotspotKey,
-          fieldName: pending.fieldName,
-          axis: pending.axis,
-          stepSize: pending.stepSize,
-          currentValue: pending.currentValue,
-          minValue: pending.minValue,
-          maxValue: pending.maxValue,
-          usesVirtualOverlay: pending.usesVirtualOverlay,
-          minCenterLocal: pending.minCenterLocal,
-          maxCenterLocal: pending.maxCenterLocal,
-          crossCenterLocal: pending.crossCenterLocal,
-          overlayRect: pending.usesVirtualOverlay ? pending.overlayRect : null,
-        });
         dragPendingRef.current = null;
       };
 
@@ -1126,10 +1161,6 @@
           left: Number(nextRect.left.toFixed(2)),
           top: Number(nextRect.top.toFixed(2)),
         });
-        setActiveDragDebug((current) => current ? {
-          ...current,
-          overlayRect: nextRect,
-        } : current);
       };
 
       const estimateDragPixelsPerStep = (hotspotKey, fieldName, axis) => {
@@ -1149,6 +1180,7 @@
         }
 
         const dragFrameMetrics = {
+          viewMinX: currentScene.viewMinX,
           viewWidth: currentScene.viewWidth,
           viewHeight: currentScene.viewHeight,
         };
@@ -1204,6 +1236,10 @@
           // Some browsers can reject capture in edge cases; the gesture can still proceed.
         }
 
+        if (isMobileViewportRef.current) {
+          setIsMobileDragScrollLocked(true);
+        }
+
         const hotspotKey = dragZone.getAttribute("data-hotspot-key");
         const fieldName = dragZone.getAttribute("data-field-name");
         const axis = dragZone.getAttribute("data-axis") || "horizontal";
@@ -1215,6 +1251,7 @@
           container.getBoundingClientRect();
         const dragFrameMetrics = currentScene
           ? {
+            viewMinX: currentScene.viewMinX,
             viewWidth: currentScene.viewWidth,
             viewHeight: currentScene.viewHeight,
           }
@@ -1410,9 +1447,31 @@
         event.stopPropagation();
         const fieldName = controlZone.getAttribute("data-field-name");
         const direction = event.deltaY < 0 ? 1 : -1;
+        const stepSize = FIELD_STEP_MAP[fieldName] || 1;
+        const currentValue = Number(specRef.current[fieldName]);
+        const bounds = getFieldBounds(specRef.current, fieldName);
+        const requestedValue = currentValue + direction * stepSize;
+        const appliedValue = roundToStep(
+          requestedValue,
+          stepSize,
+          bounds.min,
+          bounds.max
+        );
+        const isIllegalMove = (
+          (requestedValue < bounds.min || requestedValue > bounds.max) &&
+          appliedValue === currentValue
+        );
+
+        if (isIllegalMove) {
+          triggerConstraintFlash();
+        }
+
         wheelLockUntilRef.current = Date.now() + WHEEL_LOCK_TTL_MS;
         lockGlobalWheelScroll();
         markActiveWheelField(fieldName);
+        if (appliedValue === currentValue) {
+          return;
+        }
         markHighChurn({
           type: "wheel",
           fieldName,
@@ -1462,7 +1521,10 @@
           contentRect.width > 0 &&
           contentRect.height > 0
         ) {
-          const sceneX = ((event.clientX - contentRect.left) / contentRect.width) * currentScene.viewWidth;
+          const sceneX = (
+            currentScene.viewMinX +
+            ((event.clientX - contentRect.left) / contentRect.width) * currentScene.viewWidth
+          );
           const sceneY = ((event.clientY - contentRect.top) / contentRect.height) * currentScene.viewHeight;
           const hiddenWheelHotspot = wheelHotspotsRef.current.find((hotspot) => (
             sceneX >= hotspot.hitX &&
@@ -1562,7 +1624,7 @@
         container.removeEventListener("pointercancel", handlePointerEnd);
         container.removeEventListener("lostpointercapture", handlePointerEnd);
       };
-    }, [markActiveWheelField, markHighChurn, onDismissField, onSelectField]);
+    }, [markActiveWheelField, markHighChurn, onDismissField, onSelectField, triggerConstraintFlash]);
 
     const viewportSceneWidth = isMobileViewport ? renderFrame.sideViewportWidth : renderFrame.viewWidth;
     const contentWidthPercent = (renderFrame.viewWidth / viewportSceneWidth) * 100;
@@ -1579,28 +1641,13 @@
       });
     };
     const shouldShowCornerToggle = !isMobileViewport || !hasDiscoveredMobileSwipe;
-    const dragDebugRangeStyle = activeDragDebug
-      ? activeDragDebug.axis === "vertical"
-        ? {
-          left: `${activeDragDebug.crossCenterLocal - 1}px`,
-          top: `${Math.min(activeDragDebug.minCenterLocal, activeDragDebug.maxCenterLocal)}px`,
-          width: "2px",
-          height: `${Math.abs(activeDragDebug.maxCenterLocal - activeDragDebug.minCenterLocal)}px`,
-        }
-        : {
-          left: `${Math.min(activeDragDebug.minCenterLocal, activeDragDebug.maxCenterLocal)}px`,
-          top: `${activeDragDebug.crossCenterLocal - 1}px`,
-          width: `${Math.abs(activeDragDebug.maxCenterLocal - activeDragDebug.minCenterLocal)}px`,
-          height: "2px",
-        }
-      : null;
 
     return (
       <div
         ref={containerRef}
         className={`figure-wrap ${isCopyFlashing ? "is-copy-flashing" : ""} ${
           isMobileViewport ? "is-mobile-scroll" : ""
-        }`}
+        } ${isMobileDragScrollLocked ? "is-mobile-drag-scroll-locked" : ""}`}
       >
         {shouldShowCornerToggle ? (
           <button
@@ -1618,6 +1665,13 @@
             </svg>
           </button>
         ) : null}
+        {constraintFlashNonce > 0 ? (
+          <div
+            key={constraintFlashNonce}
+            className="figure-constraint-flash"
+            aria-hidden="true"
+          />
+        ) : null}
         <div
           ref={scrollViewportRef}
           className="figure-scroll-viewport"
@@ -1632,64 +1686,12 @@
             <div className="figure-svg-layer">
               <BoltFigureSvg
                 scene={scene}
+                frameMinX={renderFrame.viewMinX}
                 frameWidth={renderFrame.viewWidth}
                 frameHeight={renderFrame.viewHeight}
               />
             </div>
             <div className="figure-interaction-overlay" aria-hidden="true">
-              {activeDragDebug && dragDebugRangeStyle ? (
-                <>
-                  <div className="figure-drag-debug-range" style={dragDebugRangeStyle} />
-                  <div
-                    className="figure-drag-debug-bound figure-drag-debug-bound-start"
-                    style={
-                      activeDragDebug.axis === "vertical"
-                        ? {
-                          left: `${activeDragDebug.crossCenterLocal}px`,
-                          top: `${activeDragDebug.minCenterLocal}px`,
-                        }
-                        : {
-                          left: `${activeDragDebug.minCenterLocal}px`,
-                          top: `${activeDragDebug.crossCenterLocal}px`,
-                        }
-                    }
-                  />
-                  <div
-                    className="figure-drag-debug-bound figure-drag-debug-bound-end"
-                    style={
-                      activeDragDebug.axis === "vertical"
-                        ? {
-                          left: `${activeDragDebug.crossCenterLocal}px`,
-                          top: `${activeDragDebug.maxCenterLocal}px`,
-                        }
-                        : {
-                          left: `${activeDragDebug.maxCenterLocal}px`,
-                          top: `${activeDragDebug.crossCenterLocal}px`,
-                        }
-                    }
-                  />
-                  {activeDragDebug.overlayRect ? (
-                    <div
-                      className="figure-drag-debug-overlay"
-                      style={{
-                        left: `${activeDragDebug.overlayRect.left}px`,
-                        top: `${activeDragDebug.overlayRect.top}px`,
-                        width: `${activeDragDebug.overlayRect.width}px`,
-                        height: `${activeDragDebug.overlayRect.height}px`,
-                      }}
-                    />
-                  ) : null}
-                  <div className="figure-drag-debug-card">
-                    <div>{activeDragDebug.hotspotKey}</div>
-                    <div>
-                      {activeDragDebug.axis} · {activeDragDebug.usesVirtualOverlay ? "virtual" : "direct"}
-                    </div>
-                    <div>
-                      {activeDragDebug.minValue.toFixed(1)} / {activeDragDebug.currentValue.toFixed(1)} / {activeDragDebug.maxValue.toFixed(1)}
-                    </div>
-                  </div>
-                </>
-              ) : null}
               {visibleWheelHotspots.map((hotspot) => (
                 <div
                   key={hotspot.key}
@@ -1699,7 +1701,7 @@
                   data-field-name={hotspot.fieldName}
                   onClick={() => onSelectField?.(hotspot.fieldName)}
                   style={{
-                    left: `${(hotspot.hitX / renderFrame.viewWidth) * 100}%`,
+                    left: `${((hotspot.hitX - renderFrame.viewMinX) / renderFrame.viewWidth) * 100}%`,
                     top: `${(hotspot.hitY / renderFrame.viewHeight) * 100}%`,
                     width: `${(hotspot.hitWidth / renderFrame.viewWidth) * 100}%`,
                     height: `${(hotspot.hitHeight / renderFrame.viewHeight) * 100}%`,
@@ -1727,7 +1729,7 @@
                       height: `${activeDragOverlayRect.height}px`,
                     }
                     : {
-                      left: `${(hotspot.x / renderFrame.viewWidth) * 100}%`,
+                      left: `${((hotspot.x - renderFrame.viewMinX) / renderFrame.viewWidth) * 100}%`,
                       top: `${(hotspot.y / renderFrame.viewHeight) * 100}%`,
                       width: `${(hotspot.width / renderFrame.viewWidth) * 100}%`,
                       height: `${(hotspot.height / renderFrame.viewHeight) * 100}%`,

@@ -156,6 +156,7 @@
   const buildBoltFigureScene = (inputSpec, options = {}) => {
     const spec = normalizeBoltSpec(inputSpec);
     const layoutMode = options.layoutMode === "mobile-scroll" ? "mobile-scroll" : "default";
+    const isMobileScrollLayout = layoutMode === "mobile-scroll";
     const showTopView = layoutMode === "mobile-scroll"
       ? true
       : options.showTopView !== false;
@@ -175,16 +176,25 @@
     const sideTopY = topGutter;
     const sideCenterY = sideTopY + headRadiusPx;
     const sideBottomY = sideTopY + headRadiusPx * 2;
-    const centerX = outerLeftMargin + topCircleRadiusPx;
+    const centerX = isMobileScrollLayout
+      ? rightGutter - leftGutter - viewSeparation - topCircleRadiusPx
+      : outerLeftMargin + topCircleRadiusPx;
     const topCenterY = sideCenterY;
     const topViewRightX = centerX + topCircleRadiusPx;
-    const partLeftX = showTopView
+    const partLeftX = isMobileScrollLayout
+      ? rightGutter
+      : showTopView
       ? topViewRightX + viewSeparation + leftGutter
       : rightGutter;
     const partRightX = partLeftX + sideWidthPx;
-    const viewWidth = partRightX + rightGutter;
+    const viewMinX = isMobileScrollLayout
+      ? Math.min(0, centerX - topCircleRadiusPx - outerLeftMargin)
+      : 0;
+    const viewWidth = partRightX + rightGutter - viewMinX;
     const sideViewportWidth = sideWidthPx + rightGutter * 2;
-    const sideFramedScrollLeft = Math.max(0, viewWidth - sideViewportWidth);
+    const sideFramedScrollLeft = isMobileScrollLayout
+      ? Math.max(0, -viewMinX)
+      : Math.max(0, viewWidth - sideViewportWidth);
     const bottomDimensionLineY = sideBottomY + 24;
     const lowerTextY = bottomDimensionLineY + 12;
     const topViewBottomY = topCenterY + topCircleRadiusPx + 26;
@@ -283,6 +293,7 @@
     return {
       spec,
       detailLevel,
+      viewMinX,
       viewWidth,
       viewHeight,
       layoutMode,
@@ -389,12 +400,13 @@
   );
 
   const clampRectToScene = (rect, scene) => {
-    const maxX = Math.max(0, scene.viewWidth - rect.width);
+    const minX = Number.isFinite(scene.viewMinX) ? scene.viewMinX : 0;
+    const maxX = Math.max(minX, minX + scene.viewWidth - rect.width);
     const maxY = Math.max(0, scene.viewHeight - rect.height);
 
     return {
       ...rect,
-      x: Math.min(Math.max(rect.x, 0), maxX),
+      x: Math.min(Math.max(rect.x, minX), maxX),
       y: Math.min(Math.max(rect.y, 0), maxY),
     };
   };
@@ -535,6 +547,7 @@
     const includeWheelZones = options.includeWheelZones !== false;
     const {
       spec,
+      viewMinX,
       viewWidth,
       viewHeight,
       showTopView,
@@ -550,9 +563,9 @@
     } = scene;
 
     return [
-      `<svg class="figure-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewWidth} ${viewHeight}" role="img" aria-label="${getBoltFigureAriaLabel(showTopView)}">`,
+      `<svg class="figure-svg" xmlns="http://www.w3.org/2000/svg" viewBox="${viewMinX} 0 ${viewWidth} ${viewHeight}" role="img" aria-label="${getBoltFigureAriaLabel(showTopView)}">`,
       `<style>${FIGURE_SVG_STYLE}</style>`,
-      `<rect x="0" y="0" width="${viewWidth}" height="${viewHeight}" fill="#f7f1e8" />`,
+      `<rect x="${viewMinX}" y="0" width="${viewWidth}" height="${viewHeight}" fill="#f7f1e8" />`,
       renderLine("figure-centerline", centerline),
       `<path class="figure-line" d="${sideOutlinePath}" />`,
       threadLines.top.map((line) => renderLine("figure-thread", line)).join(""),

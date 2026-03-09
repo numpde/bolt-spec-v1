@@ -24,6 +24,9 @@
   const EDITABLE_FIELD_NAMES = BOLT_FIELDS.map((field) => field.name);
   const fieldMap = Object.fromEntries(BOLT_FIELDS.map((field) => [field.name, field]));
   const COPY_FEEDBACK_MS = 1400;
+  const editableSpecDidChange = (currentSpec, nextSpec) => (
+    EDITABLE_FIELD_NAMES.some((fieldName) => currentSpec[fieldName] !== nextSpec[fieldName])
+  );
 
   const copyTextToClipboard = async (text) => {
     if (navigator.clipboard?.writeText && window.isSecureContext) {
@@ -282,10 +285,16 @@
     ]);
 
     const handleFieldChange = React.useCallback((fieldName, nextValue) => {
-      setDraftSpec((current) => coerceDraftSpec({
-        ...current,
-        [fieldName]: nextValue,
-      }));
+      setDraftSpec((current) => {
+        const nextDraftSpec = coerceDraftSpec({
+          ...current,
+          [fieldName]: nextValue,
+        });
+
+        return editableSpecDidChange(current, nextDraftSpec)
+          ? nextDraftSpec
+          : current;
+      });
     }, [coerceDraftSpec]);
 
     const applyFieldStepDelta = React.useCallback((fieldName, stepDelta) => {
@@ -310,10 +319,14 @@
           ? String(field.step).split(".")[1].length
           : 0;
 
-        return coerceDraftSpec({
+        const nextDraftSpec = coerceDraftSpec({
           ...current,
           [fieldName]: Number(clampedValue.toFixed(decimals)),
         });
+
+        return editableSpecDidChange(current, nextDraftSpec)
+          ? nextDraftSpec
+          : current;
       });
     }, [coerceDraftSpec]);
 
