@@ -1,0 +1,29 @@
+defaultProfileKey: iso-metric-262
+profiles:
+  iso-metric-262:
+    label: ISO metric selected thread sizes
+    shortLabel: ISO metric
+    system: metric
+    threadForm: iso-metric
+    supportsFieldSet: metric-mm
+    nominalUnit: mm
+    pitchUnit: mm
+    nominalToleranceMm: 0.01
+    pitchToleranceMm: 0.01
+    diameterSeries:
+      4.0:
+        coarse:
+          - 0.7
+        fine:
+          - 0.5
+      5.0:
+        coarse:
+          - 0.8
+        fine:
+          - 0.5
+      6.0:
+        coarse:
+          - 1.0
+        fine:
+          - 0.75
+          - 0.5

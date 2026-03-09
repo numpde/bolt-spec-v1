@@ -16,6 +16,7 @@
       m4: {
         displayName: "Coarse M4",
         presetName: "M4",
+        standardProfileKey: "iso-metric-262",
         nominalDiameterMm: 4.0,
         pitchMm: 0.7,
         underHeadLengthMm: 18.0,
@@ -29,6 +30,7 @@
       m5: {
         displayName: "Coarse M5",
         presetName: "M5",
+        standardProfileKey: "iso-metric-262",
         nominalDiameterMm: 5.0,
         pitchMm: 0.8,
         underHeadLengthMm: 18.0,
@@ -42,6 +44,7 @@
       m6: {
         displayName: "Coarse M6",
         presetName: "M6",
+        standardProfileKey: "iso-metric-262",
         nominalDiameterMm: 6.0,
         pitchMm: 1.0,
         underHeadLengthMm: 18.0,
@@ -67,6 +70,7 @@
     {
       name: "nominalDiameterMm",
       label: "Nominal diameter",
+      unit: "mm",
       hint: "Thread major diameter",
       min: 4,
       max: 8,
@@ -75,7 +79,8 @@
     {
       name: "pitchMm",
       label: "Pitch",
-      hint: "ISO coarse defaults: M5 0.8, M6 1.0",
+      unit: "mm",
+      hint: "Thread spacing",
       min: 0.4,
       max: 2.0,
       step: 0.05,
@@ -83,6 +88,7 @@
     {
       name: "underHeadLengthMm",
       label: "Under-head length",
+      unit: "mm",
       hint: "Shank length from head seat to tip",
       min: 6,
       max: 60,
@@ -91,7 +97,8 @@
     {
       name: "threadedLengthMm",
       label: "Threaded length",
-      hint: "Threaded portion of the shank, capped to under-head length minus 1 mm",
+      unit: "mm",
+      hint: "Threaded portion of the shank",
       min: 0.5,
       max: 60,
       step: 0.5,
@@ -99,6 +106,7 @@
     {
       name: "headDiameterMm",
       label: "Head diameter",
+      unit: "mm",
       hint: "Top-view outer diameter",
       min: 5,
       max: 14,
@@ -107,6 +115,7 @@
     {
       name: "headHeightMm",
       label: "Head height",
+      unit: "mm",
       hint: "Axial head thickness",
       min: 2,
       max: 8,
@@ -115,6 +124,7 @@
     {
       name: "tipChamferMm",
       label: "Tip chamfer",
+      unit: "mm",
       hint: "Side-view tip taper length",
       min: 0,
       max: 2,
@@ -123,6 +133,7 @@
     {
       name: "socketDepthMm",
       label: "Socket depth",
+      unit: "mm",
       hint: "Side-view hidden depth",
       min: 1,
       max: 5,
@@ -286,6 +297,7 @@
           ...presetValue,
           displayName: String(presetValue.displayName || presetValue.presetName || presetKey),
           presetName: String(presetValue.presetName || presetKey.toUpperCase()),
+          standardProfileKey: String(presetValue.standardProfileKey || "iso-metric-262"),
           driveLabel: String(presetValue.driveLabel || "T25"),
         }];
       })

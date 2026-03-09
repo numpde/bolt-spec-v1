@@ -13,6 +13,8 @@
     parseCheckpointFromLocation,
     buildCheckpointHistoryState,
     extractCheckpointFromHistoryState,
+    buildBoltDiagnostics,
+    getThreadSeriesContext,
   } = window;
   const {
     FieldControlTray,
@@ -24,9 +26,48 @@
   const EDITABLE_FIELD_NAMES = BOLT_FIELDS.map((field) => field.name);
   const fieldMap = Object.fromEntries(BOLT_FIELDS.map((field) => [field.name, field]));
   const COPY_FEEDBACK_MS = 1400;
+  const EXTERNAL_FIGURE_FREEZE_MS = 320;
+  const PARAMS_BELOW_CATALOG_STORAGE_KEY = "bolt-params-below-catalog-v1";
+  const TOP_VIEW_PREFERENCE_STORAGE_KEY = "bolt-top-view-preference-v1";
   const editableSpecDidChange = (currentSpec, nextSpec) => (
     EDITABLE_FIELD_NAMES.some((fieldName) => currentSpec[fieldName] !== nextSpec[fieldName])
   );
+
+  const readParamsBelowCatalog = () => {
+    if (typeof window === "undefined") {
+      return true;
+    }
+
+    try {
+      const raw = window.localStorage.getItem(PARAMS_BELOW_CATALOG_STORAGE_KEY);
+
+      if (!raw) {
+        return true;
+      }
+
+      return raw === "true";
+    } catch (error) {
+      return true;
+    }
+  };
+
+  const readTopViewPreference = () => {
+    if (typeof window === "undefined") {
+      return true;
+    }
+
+    try {
+      const raw = window.localStorage.getItem(TOP_VIEW_PREFERENCE_STORAGE_KEY);
+
+      if (!raw) {
+        return true;
+      }
+
+      return raw !== "false";
+    } catch (error) {
+      return true;
+    }
+  };
 
   const copyTextToClipboard = async (text) => {
     if (navigator.clipboard?.writeText && window.isSecureContext) {
@@ -54,14 +95,15 @@
     }
   };
 
-  const getMatchingPresetKey = (draftLikeSpec) => {
+  const getMatchingPresetKey = (draftLikeSpec, standardProfileKey) => {
     const normalizedDraftSpec = normalizeBoltSpec(draftLikeSpec);
     const normalizedPresetEntries = Object.entries(getBoltPresets()).map(([presetKey, preset]) => (
       [presetKey, normalizeBoltSpec(preset)]
     ));
 
     return (
-      normalizedPresetEntries.find(([, normalizedPreset]) => (
+      normalizedPresetEntries.find(([presetKey, normalizedPreset]) => (
+        cloneBoltPreset(presetKey).standardProfileKey === standardProfileKey &&
         EDITABLE_FIELD_NAMES.every((fieldName) => (
           normalizedDraftSpec[fieldName] === normalizedPreset[fieldName]
         ))
@@ -69,11 +111,16 @@
     );
   };
 
-  const getDefaultAppState = () => normalizeCheckpointState({
-    presetName: getDefaultPresetKey(),
-    draftSpec: cloneBoltPreset(getDefaultPresetKey()),
-    showTopView: true,
-  });
+  const getDefaultAppState = () => {
+    const defaultPresetKey = getDefaultPresetKey();
+    const defaultPreset = cloneBoltPreset(defaultPresetKey);
+
+    return normalizeCheckpointState({
+      presetName: defaultPresetKey,
+      standardProfileKey: defaultPreset.standardProfileKey,
+      draftSpec: defaultPreset,
+    });
+  };
 
   const getInitialAppState = () => {
     if (typeof window === "undefined") {
@@ -90,25 +137,39 @@
   const App = () => {
     const initialAppState = React.useMemo(() => getInitialAppState(), []);
     const [presetName, setPresetName] = React.useState(initialAppState.presetName);
+    const [standardProfileKey, setStandardProfileKey] = React.useState(initialAppState.standardProfileKey);
     const [draftSpec, setDraftSpec] = React.useState(initialAppState.draftSpec);
-    const [showTopView, setShowTopView] = React.useState(initialAppState.showTopView);
+    const [showTopView, setShowTopView] = React.useState(() => readTopViewPreference());
     const [activeFieldName, setActiveFieldName] = React.useState(null);
     const [copyState, setCopyState] = React.useState("idle");
     const [copyFlashNonce, setCopyFlashNonce] = React.useState(0);
+    const [isParamsBelowCatalog, setIsParamsBelowCatalog] = React.useState(() => readParamsBelowCatalog());
+    const [activeExternalFreezeFieldName, setActiveExternalFreezeFieldName] = React.useState(null);
     const pendingHistorySyncRef = React.useRef(null);
     const copyFeedbackTimerRef = React.useRef(null);
+    const externalFigureFreezeTimerRef = React.useRef(null);
     const pointerInitiatedCopyRef = React.useRef(false);
     const deferredDraftSpec = React.useDeferredValue(draftSpec);
     const spec = React.useMemo(() => normalizeBoltSpec(draftSpec), [draftSpec]);
+    const deferredSpec = React.useMemo(() => normalizeBoltSpec(deferredDraftSpec), [deferredDraftSpec]);
     const activePresetKey = React.useMemo(
-      () => getMatchingPresetKey(draftSpec),
-      [draftSpec]
+      () => getMatchingPresetKey(draftSpec, standardProfileKey),
+      [draftSpec, standardProfileKey]
     );
     const deferredActivePresetKey = React.useMemo(
-      () => getMatchingPresetKey(deferredDraftSpec),
-      [deferredDraftSpec]
+      () => getMatchingPresetKey(deferredDraftSpec, standardProfileKey),
+      [deferredDraftSpec, standardProfileKey]
     );
-
+    const diagnostics = React.useMemo(
+      () => buildBoltDiagnostics(deferredSpec, standardProfileKey),
+      [deferredSpec, standardProfileKey]
+    );
+    const diagnosticsByField = React.useMemo(() => diagnostics.reduce((grouped, diagnostic) => {
+      const bucket = grouped[diagnostic.fieldName] || [];
+      bucket.push(diagnostic);
+      grouped[diagnostic.fieldName] = bucket;
+      return grouped;
+    }, {}), [diagnostics]);
     const getFieldBounds = React.useCallback((draftLikeSpec, fieldName) => {
       const field = fieldMap[fieldName];
 
@@ -143,25 +204,24 @@
       const checkpointState = normalizeCheckpointState({
         presetName: nextPresetName,
         draftSpec: nextDraftSpec,
-        showTopView,
       });
 
       return checkpointState.draftSpec;
-    }, [presetName, showTopView]);
+    }, [presetName]);
 
     const buildCurrentAppState = React.useCallback((overrides = {}) => (
       normalizeCheckpointState({
         presetName: activePresetKey || presetName,
+        standardProfileKey,
         draftSpec,
-        showTopView,
         ...overrides,
       })
-    ), [activePresetKey, draftSpec, presetName, showTopView]);
+    ), [activePresetKey, draftSpec, presetName, standardProfileKey]);
 
     const applyAppState = React.useCallback((nextAppState) => {
       setPresetName(nextAppState.presetName);
+      setStandardProfileKey(nextAppState.standardProfileKey);
       setDraftSpec(nextAppState.draftSpec);
-      setShowTopView(nextAppState.showTopView);
     }, []);
 
     const commitCheckpointToHistory = React.useCallback((mode, checkpointLike) => {
@@ -247,16 +307,43 @@
       if (copyFeedbackTimerRef.current) {
         window.clearTimeout(copyFeedbackTimerRef.current);
       }
+
+      if (externalFigureFreezeTimerRef.current) {
+        window.clearTimeout(externalFigureFreezeTimerRef.current);
+      }
     }, []);
+
+    React.useEffect(() => {
+      try {
+        window.localStorage.setItem(
+          PARAMS_BELOW_CATALOG_STORAGE_KEY,
+          String(isParamsBelowCatalog)
+        );
+      } catch (error) {
+        // Ignore persistence failures; the default order still works for the session.
+      }
+    }, [isParamsBelowCatalog]);
+
+    React.useEffect(() => {
+      try {
+        window.localStorage.setItem(
+          TOP_VIEW_PREFERENCE_STORAGE_KEY,
+          String(showTopView)
+        );
+      } catch (error) {
+        // Ignore persistence failures; the current session state still works.
+      }
+    }, [showTopView]);
 
     const handlePresetSelect = React.useCallback((nextPresetName) => {
       const currentCheckpoint = buildCurrentAppState();
       flushPendingHistorySync(currentCheckpoint);
+      const nextPreset = cloneBoltPreset(nextPresetName);
 
       const nextCheckpoint = normalizeCheckpointState({
         presetName: nextPresetName,
-        draftSpec: cloneBoltPreset(nextPresetName),
-        showTopView,
+        standardProfileKey: nextPreset.standardProfileKey,
+        draftSpec: nextPreset,
       });
 
       commitCheckpointToHistory("push", nextCheckpoint);
@@ -266,7 +353,6 @@
       buildCurrentAppState,
       commitCheckpointToHistory,
       flushPendingHistorySync,
-      showTopView,
     ]);
 
     const handleLikedCheckpointSelect = React.useCallback((checkpointLike) => {
@@ -334,6 +420,19 @@
       applyFieldStepDelta(fieldName, direction);
     }, [applyFieldStepDelta]);
 
+    const markExternalFigureFreeze = React.useCallback((fieldName) => {
+      setActiveExternalFreezeFieldName(fieldName);
+
+      if (externalFigureFreezeTimerRef.current) {
+        window.clearTimeout(externalFigureFreezeTimerRef.current);
+      }
+
+      externalFigureFreezeTimerRef.current = window.setTimeout(() => {
+        setActiveExternalFreezeFieldName(null);
+        externalFigureFreezeTimerRef.current = null;
+      }, EXTERNAL_FIGURE_FREEZE_MS);
+    }, []);
+
     const handleFieldStepAdjust = React.useCallback((fieldName, stepDelta) => {
       if (!Number.isFinite(stepDelta) || stepDelta === 0) {
         return;
@@ -343,16 +442,35 @@
     }, [applyFieldStepDelta]);
 
     const activeField = activeFieldName ? fieldMap[activeFieldName] : null;
-    const deferredActiveFieldBounds = activeFieldName
-      ? getFieldBounds(deferredDraftSpec, activeFieldName)
+    const activeFieldBounds = activeFieldName
+      ? getFieldBounds(draftSpec, activeFieldName)
       : { min: 0, max: 0 };
+    const activeFieldDiagnostics = React.useMemo(() => {
+      if (!activeFieldName) {
+        return [];
+      }
+
+      return buildBoltDiagnostics(spec, standardProfileKey).filter(
+        (diagnostic) => diagnostic.fieldName === activeFieldName
+      );
+    }, [activeFieldName, spec, standardProfileKey]);
+    const activePitchThreadSeriesContext = React.useMemo(() => {
+      if (activeFieldName !== "pitchMm") {
+        return null;
+      }
+
+      return getThreadSeriesContext(spec, standardProfileKey);
+    }, [activeFieldName, spec, standardProfileKey]);
     const currentCheckpoint = React.useMemo(
       () => buildCurrentAppState(),
       [buildCurrentAppState]
     );
 
     const handleApplySizeFamily = React.useCallback((sizePresetKey) => {
+      const nextPreset = cloneBoltPreset(sizePresetKey);
+
       setPresetName(sizePresetKey);
+      setStandardProfileKey(nextPreset.standardProfileKey);
       setDraftSpec((current) => coerceDraftSpec(
         applySizeFamilyToDraftSpec(current, sizePresetKey),
         sizePresetKey
@@ -364,8 +482,8 @@
     }, []);
 
     const handleDownloadCurrentFigure = React.useCallback(async () => {
-      await downloadCheckpointFigure(currentCheckpoint);
-    }, [currentCheckpoint]);
+      await downloadCheckpointFigure(currentCheckpoint, { showTopView });
+    }, [currentCheckpoint, showTopView]);
 
     const triggerCopyFlash = React.useCallback(() => {
       setCopyFlashNonce((current) => current + 1);
@@ -441,78 +559,134 @@
         <rect x="4.5" y="2.5" width="8.5" height="10" rx="1.8" />
       </svg>
     );
+    const handleToggleParamsPlacement = React.useCallback(() => {
+      setIsParamsBelowCatalog((current) => !current);
+    }, []);
 
-    return (
-      <div className="app-shell">
-        <main className="preview-column">
-          <section className="preview-card">
-            <div className="panel-toolbar">
-              <p className="eyebrow">BYOB -- build your own bolt</p>
-              <div className="panel-toolbar-actions">
-                <button
-                  type="button"
-                  className="panel-toolbar-button panel-toolbar-icon-button"
-                  onClick={handleDownloadCurrentFigure}
-                  aria-label="Download sketch"
-                  title="Download sketch"
-                >
-                  {downloadIcon}
-                </button>
-                <button
-                  type="button"
-                  className={`panel-toolbar-button panel-toolbar-icon-button ${copyState === "failed" ? "is-failed" : ""}`}
-                  onPointerDown={handleCopyPointerDown}
-                  onClick={handleCopyClick}
-                  aria-label="Copy link"
-                  title="Copy link"
-                >
-                  {copyIcon}
-                </button>
-              </div>
-            </div>
-            <BoltFigure
-              spec={spec}
-              onAdjustField={handleFieldWheelAdjust}
-              onStepAdjustField={handleFieldStepAdjust}
-              onSelectField={setActiveFieldName}
-              onDismissField={handleCloseActiveField}
-              onSetTopView={setShowTopView}
-              activeFieldName={activeFieldName}
-              copyFlashNonce={copyFlashNonce}
-              showTopView={showTopView}
-            />
-            {activeField ? (
-              <FieldControlTray
-                field={activeField}
-                value={deferredDraftSpec[activeField.name]}
-                min={deferredActiveFieldBounds.min}
-                max={deferredActiveFieldBounds.max}
-                activeSizeFamilyKey={deferredActivePresetKey}
-                onClose={handleCloseActiveField}
-                onSliderChange={handleActiveTraySliderChange}
-                onStepAdjust={handleActiveTrayStepAdjust}
-                onApplySizeFamily={handleApplySizeFamily}
-              />
-            ) : null}
-          </section>
-        </main>
+    const paramsPlacementLabel = isParamsBelowCatalog
+      ? "Move editable parameters above liked bolts and preset baselines"
+      : "Move editable parameters below liked bolts and preset baselines";
+    const paramsPlacementIcon = isParamsBelowCatalog ? (
+      <svg className="panel-toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M10 4.25V15.75" />
+        <path d="M6.75 7.5L10 4.25L13.25 7.5" />
+      </svg>
+    ) : (
+      <svg className="panel-toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M10 4.25V15.75" />
+        <path d="M6.75 12.5L10 15.75L13.25 12.5" />
+      </svg>
+    );
 
-        <aside className="control-column">
-          <PresetPicker
-            selectedPreset={deferredActivePresetKey}
-            onSelect={handlePresetSelect}
+    const byobCard = (
+      <section className="preview-card">
+        <div className="panel-toolbar">
+          <p className="eyebrow">BYOB -- build your own bolt</p>
+          <div className="panel-toolbar-actions">
+            <button
+              type="button"
+              className="panel-toolbar-button panel-toolbar-icon-button"
+              onClick={handleDownloadCurrentFigure}
+              aria-label="Download sketch"
+              title="Download sketch"
+            >
+              {downloadIcon}
+            </button>
+            <button
+              type="button"
+              className={`panel-toolbar-button panel-toolbar-icon-button ${copyState === "failed" ? "is-failed" : ""}`}
+              onPointerDown={handleCopyPointerDown}
+              onClick={handleCopyClick}
+              aria-label="Copy link"
+              title="Copy link"
+            >
+              {copyIcon}
+            </button>
+          </div>
+        </div>
+        <BoltFigure
+          spec={spec}
+          onAdjustField={handleFieldWheelAdjust}
+          onStepAdjustField={handleFieldStepAdjust}
+          onSelectField={setActiveFieldName}
+          onDismissField={handleCloseActiveField}
+          onSetTopView={setShowTopView}
+          activeFieldName={activeFieldName}
+          copyFlashNonce={copyFlashNonce}
+          showTopView={showTopView}
+          externalFreezeFieldName={activeExternalFreezeFieldName}
+        />
+        {activeField ? (
+          <FieldControlTray
+            field={activeField}
+            value={draftSpec[activeField.name]}
+            min={activeFieldBounds.min}
+            max={activeFieldBounds.max}
+            activeSizeFamilyKey={activePresetKey}
+            fieldDiagnostics={activeFieldDiagnostics}
+            threadSeriesContext={activePitchThreadSeriesContext}
+            onClose={handleCloseActiveField}
+            onInteractionActivity={markExternalFigureFreeze}
+            onSliderChange={handleActiveTraySliderChange}
+            onStepAdjust={handleActiveTrayStepAdjust}
+            onApplySizeFamily={handleApplySizeFamily}
           />
+        ) : null}
+      </section>
+    );
 
+    const catalogRow = (
+      <div className="app-card-row app-card-row--pair">
+        <div className="app-card-slot">
           <LikedBoltsCard
             currentCheckpoint={currentCheckpoint}
             onSelectCheckpoint={handleLikedCheckpointSelect}
           />
+        </div>
+        <div className="app-card-slot">
+          <PresetPicker
+            selectedPreset={deferredActivePresetKey}
+            onSelect={handlePresetSelect}
+          />
+        </div>
+      </div>
+    );
 
+    const paramsCard = (
+      <div className="app-card-row app-card-row--single">
+        <div className="app-card-slot">
           <ParameterPanel
             spec={deferredDraftSpec}
+            diagnosticsByField={diagnosticsByField}
             onFieldChange={handleFieldChange}
+            onFieldWheelActivity={markExternalFigureFreeze}
+            headerAction={(
+              <button
+                type="button"
+                className="panel-toolbar-button panel-toolbar-icon-button"
+                onClick={handleToggleParamsPlacement}
+                aria-label={paramsPlacementLabel}
+                title={paramsPlacementLabel}
+              >
+                {paramsPlacementIcon}
+              </button>
+            )}
           />
-        </aside>
+        </div>
+      </div>
+    );
+
+    return (
+      <div className="app-shell">
+        <main className="app-card-grid" aria-label="Bolt editor cards">
+          <div className="app-card-row app-card-row--single">
+            <div className="app-card-slot">
+              {byobCard}
+            </div>
+          </div>
+          {isParamsBelowCatalog ? catalogRow : paramsCard}
+          {isParamsBelowCatalog ? paramsCard : catalogRow}
+        </main>
       </div>
     );
   };

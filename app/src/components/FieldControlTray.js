@@ -8,6 +8,23 @@
   const formatBoundValue = (value) => (
     Number.isFinite(value) ? value.toFixed(1) : "?"
   );
+  const minusIcon = (
+    <svg className="figure-control-step-icon" viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M5 10H15" />
+    </svg>
+  );
+  const plusIcon = (
+    <svg className="figure-control-step-icon" viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M10 5V15" />
+      <path d="M5 10H15" />
+    </svg>
+  );
+  const closeIcon = (
+    <svg className="figure-control-step-icon" viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M6 6L14 14" />
+      <path d="M14 6L6 14" />
+    </svg>
+  );
 
   const FieldControlTrayImpl = ({
     field,
@@ -15,7 +32,10 @@
     min,
     max,
     activeSizeFamilyKey,
+    fieldDiagnostics = [],
+    threadSeriesContext = null,
     onClose,
+    onInteractionActivity = null,
     onSliderChange,
     onStepAdjust,
     onApplySizeFamily,
@@ -26,6 +46,7 @@
 
     const trayRef = React.useRef(null);
     const isNominalDiameterField = field.name === "nominalDiameterMm";
+    const isPitchField = field.name === "pitchMm";
 
     React.useEffect(() => {
       const tray = trayRef.current;
@@ -54,6 +75,7 @@
         }
 
         lockGlobalWheelScroll();
+        onInteractionActivity?.(field.name);
         onStepAdjust(event.deltaY < 0 ? 1 : -1);
       };
 
@@ -67,7 +89,7 @@
           capture: true,
         });
       };
-    }, [isNominalDiameterField, onStepAdjust]);
+    }, [field.name, isNominalDiameterField, onInteractionActivity, onStepAdjust]);
 
     React.useEffect(() => {
       const handleWindowKeyDown = (event) => {
@@ -90,23 +112,21 @@
       <section ref={trayRef} className="figure-control-tray">
         <div className="figure-control-tray-header">
           <div>
-            <p className="eyebrow">Quick adjust · {field.label}</p>
+            <p className="eyebrow">Adjust {field.label}</p>
           </div>
           <button
             type="button"
-            className="figure-control-close"
+            className="figure-control-step-button figure-control-step-button--icon figure-control-close"
+            aria-label="Close quick adjust"
+            title="Close quick adjust"
             onClick={onClose}
           >
-            Close
+            {closeIcon}
           </button>
         </div>
 
         {isNominalDiameterField ? (
           <>
-            <p className="figure-control-copy">
-              Switch the bolt family. This updates diameter, coarse pitch, head
-              diameter, head height, tip chamfer, and socket depth together.
-            </p>
             <div className="figure-control-size-grid">
               {SIZE_FAMILY_PRESET_KEYS.map((presetKey) => {
                 const preset = BOLT_PRESETS[presetKey];
@@ -117,7 +137,10 @@
                     key={presetKey}
                     type="button"
                     className={`figure-control-size-button ${isActive ? "is-active" : ""}`}
-                    onClick={() => onApplySizeFamily(presetKey)}
+                    onClick={() => {
+                      onInteractionActivity?.(field.name);
+                      onApplySizeFamily(presetKey);
+                    }}
                   >
                     {preset.presetName}
                   </button>
@@ -127,14 +150,38 @@
           </>
         ) : (
           <>
-            <p className="figure-control-copy">{field.hint}</p>
+            {isPitchField && threadSeriesContext?.pitchOptions?.length ? (
+              <div className="figure-control-series-grid">
+                {threadSeriesContext.pitchOptions.map((option) => (
+                  <button
+                    key={`${option.classificationKey}:${option.pitchMm}`}
+                    type="button"
+                    className={`figure-control-series-button ${option.isActive ? "is-active" : ""}`}
+                    onClick={() => {
+                      onInteractionActivity?.(field.name);
+                      onSliderChange(option.pitchMm);
+                    }}
+                  >
+                    <span className="figure-control-series-label">{option.optionLabel}</span>
+                    <span className="figure-control-series-value">
+                      {option.pitchMm.toFixed(2).replace(/0$/, "").replace(/\.$/, "")} mm
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="figure-control-step-row">
               <button
                 type="button"
-                className="figure-control-step-button"
-                onClick={() => onStepAdjust(-1)}
+                className="figure-control-step-button figure-control-step-button--icon"
+                aria-label={`Decrease ${field.label} by ${field.step} ${field.unit || ""}`.trim()}
+                title={`Decrease by ${field.step} ${field.unit || ""}`.trim()}
+                onClick={() => {
+                  onInteractionActivity?.(field.name);
+                  onStepAdjust(-1);
+                }}
               >
-                -{field.step}
+                {minusIcon}
               </button>
               <div
                 className="figure-control-value-pill"
@@ -144,10 +191,15 @@
               </div>
               <button
                 type="button"
-                className="figure-control-step-button"
-                onClick={() => onStepAdjust(1)}
+                className="figure-control-step-button figure-control-step-button--icon"
+                aria-label={`Increase ${field.label} by ${field.step} ${field.unit || ""}`.trim()}
+                title={`Increase by ${field.step} ${field.unit || ""}`.trim()}
+                onClick={() => {
+                  onInteractionActivity?.(field.name);
+                  onStepAdjust(1);
+                }}
               >
-                +{field.step}
+                {plusIcon}
               </button>
             </div>
             <input
@@ -157,7 +209,10 @@
               max={max}
               step={field.step}
               value={value}
-              onChange={(event) => onSliderChange(Number(event.target.value))}
+              onChange={(event) => {
+                onInteractionActivity?.(field.name);
+                onSliderChange(Number(event.target.value));
+              }}
             />
             <div className="figure-control-bound-row">
               <span>{formatBoundValue(min)} mm</span>

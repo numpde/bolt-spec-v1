@@ -11,8 +11,7 @@
 
     return (
       <section className="panel-card">
-        <p className="eyebrow">Preset baselines</p>
-        <p className="card-copy">Start from a named baseline.</p>
+        <p className="eyebrow">Presets</p>
         <CatalogList
           ariaLabel="Named presets"
           items={items}

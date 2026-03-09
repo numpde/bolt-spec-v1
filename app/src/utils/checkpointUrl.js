@@ -22,6 +22,12 @@
     getDefaultPresetKey,
   } = presetApi;
   const { normalizeBoltSpec } = modelApi;
+  const {
+    resolveThreadStandardProfileKey,
+    getDefaultThreadStandardProfileKey,
+  } = typeof module === "object" && module.exports
+    ? require("./boltStandards.js")
+    : globalThis;
 
   const CHECKPOINT_HISTORY_KIND = "bolt-checkpoint-v1";
   const EDITABLE_FIELD_NAMES = BOLT_FIELDS.map((field) => field.name);
@@ -49,12 +55,17 @@
   const normalizeCheckpointState = (checkpointLike) => {
     const presetName = resolvePresetKey(checkpointLike?.presetName);
     const draftSpec = coerceDraftSpec(presetName, checkpointLike?.draftSpec);
-    const showTopView = checkpointLike?.showTopView !== false;
+    const presetStandardProfileKey = cloneBoltPreset(presetName).standardProfileKey;
+    const standardProfileKey = resolveThreadStandardProfileKey(
+      checkpointLike?.standardProfileKey ||
+      presetStandardProfileKey ||
+      getDefaultThreadStandardProfileKey()
+    );
 
     return {
       presetName,
+      standardProfileKey,
       draftSpec,
-      showTopView,
     };
   };
 
@@ -63,7 +74,7 @@
     const params = new URLSearchParams();
 
     params.set("preset", checkpoint.presetName);
-    params.set("top", checkpoint.showTopView ? "1" : "0");
+    params.set("std", checkpoint.standardProfileKey);
 
     EDITABLE_FIELD_NAMES.forEach((fieldName) => {
       params.set(fieldName, String(checkpoint.draftSpec[fieldName]));
@@ -86,7 +97,7 @@
     const params = new URLSearchParams(search);
     const hasCheckpointParams = (
       params.has("preset") ||
-      params.has("top") ||
+      params.has("std") ||
       EDITABLE_FIELD_NAMES.some((fieldName) => params.has(fieldName))
     );
 
@@ -111,8 +122,8 @@
 
     return normalizeCheckpointState({
       presetName,
+      standardProfileKey: params.get("std"),
       draftSpec,
-      showTopView: params.get("top") !== "0",
     });
   };
 

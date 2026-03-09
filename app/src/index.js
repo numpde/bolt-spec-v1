@@ -30,12 +30,15 @@
 
   const boot = async () => {
     try {
-      await window.loadBoltPresetCatalog();
+      await Promise.all([
+        window.loadBoltPresetCatalog(),
+        window.loadBoltThreadStandardsCatalog(),
+      ]);
       root.render(React.createElement(window.App, null));
     } catch (error) {
-      console.error("Failed to load bolt preset catalog", error);
+      console.error("Failed to load bolt app catalogs", error);
       renderBootError(
-        "The preset YAML could not be read. Check the console and the static file path."
+        "A preset or standards YAML file could not be read. Check the console and the static file paths."
       );
     }
   };

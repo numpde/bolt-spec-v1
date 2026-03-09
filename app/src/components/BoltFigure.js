@@ -21,15 +21,25 @@
   const VISUAL_IDLE_WINDOW_MS = 56;
   const HIGH_CHURN_COOLDOWN_MS = 140;
   const WHEEL_ACTIVE_COOLDOWN_MS = 220;
-  const COPY_FLASH_MS = 620;
+  const COPY_FLASH_MS = 760;
   const CONSTRAINT_FLASH_COOLDOWN_MS = 520;
+  const OVERLAY_REFIT_SETTLE_MS = 260;
   const MOBILE_MEDIA_QUERY = "(max-width: 560px)";
   const MOBILE_SCROLL_SNAP_DELAY_MS = 140;
+  const MOBILE_PROGRAMMATIC_SCROLL_SETTLE_MS = 320;
   const MOBILE_SWIPE_DISCOVERY_STORAGE_KEY = "bolt-mobile-swipe-discovered-v1";
   const MOBILE_SWIPE_DISCOVERY_THRESHOLD_PX = 18;
   const getGlobalWheelLockUntil = () => Number(globalThis.__BOLT_WHEEL_LOCK_UNTIL__ || 0);
   const lockGlobalWheelScroll = (ttlMs = WHEEL_LOCK_TTL_MS) => {
     globalThis.__BOLT_WHEEL_LOCK_UNTIL__ = Date.now() + ttlMs;
+  };
+  const clearScheduledTimer = (timerRef) => {
+    if (timerRef.current == null) {
+      return;
+    }
+
+    window.clearTimeout(timerRef.current);
+    timerRef.current = null;
   };
   const readMobileSwipeDiscovery = () => {
     if (typeof window === "undefined") {
@@ -69,6 +79,12 @@
     width: (hotspot.width / scene.viewWidth) * contentRect.width,
     height: (hotspot.height / scene.viewHeight) * contentRect.height,
   });
+
+  const getStepDecimals = (stepSize) => (
+    String(stepSize).includes(".")
+      ? String(stepSize).split(".")[1].length
+      : 0
+  );
 
   const projectScenePositionToScreen = (scenePosition, axis, scene, contentRect) => (
     axis === "vertical"
@@ -144,6 +160,34 @@
     }
 
     return { min, max };
+  };
+
+  const snapshotSceneFrame = (scene) => ({
+    viewMinX: scene.viewMinX,
+    viewWidth: scene.viewWidth,
+    viewHeight: scene.viewHeight,
+    sideViewportWidth: scene.sideViewportWidth,
+    sideFramedScrollLeft: scene.sideFramedScrollLeft,
+  });
+
+  const snapshotOverlayLayout = (scene, dragHotspots, wheelHotspots) => ({
+    frame: snapshotSceneFrame(scene),
+    dragHotspots,
+    wheelHotspots,
+  });
+
+  const didSceneFrameChange = (previousFrame, nextFrame) => {
+    if (!previousFrame || !nextFrame) {
+      return false;
+    }
+
+    return (
+      Math.abs((previousFrame.viewMinX || 0) - (nextFrame.viewMinX || 0)) > 0.01 ||
+      Math.abs((previousFrame.viewWidth || 0) - (nextFrame.viewWidth || 0)) > 0.01 ||
+      Math.abs((previousFrame.viewHeight || 0) - (nextFrame.viewHeight || 0)) > 0.01 ||
+      Math.abs((previousFrame.sideViewportWidth || 0) - (nextFrame.sideViewportWidth || 0)) > 0.01 ||
+      Math.abs((previousFrame.sideFramedScrollLeft || 0) - (nextFrame.sideFramedScrollLeft || 0)) > 0.01
+    );
   };
 
   const BoltFigureSvg = React.memo(({
@@ -275,6 +319,7 @@
     activeFieldName = null,
     copyFlashNonce = 0,
     showTopView = true,
+    externalFreezeFieldName = null,
   }) => {
     const containerRef = React.useRef(null);
     const scrollViewportRef = React.useRef(null);
@@ -288,8 +333,10 @@
     const churnCooldownTimerRef = React.useRef(null);
     const wheelActiveTimerRef = React.useRef(null);
     const copyFlashTimerRef = React.useRef(null);
+    const overlayRefitTimerRef = React.useRef(null);
     const lastConstraintFlashMsRef = React.useRef(-Infinity);
     const mobileScrollTimerRef = React.useRef(null);
+    const programmaticScrollSettleTimerRef = React.useRef(null);
     const programmaticScrollRef = React.useRef(null);
     const lastVisualCommitMsRef = React.useRef(-Infinity);
     const latestVisualStateRef = React.useRef({
@@ -309,8 +356,11 @@
     const [renderDetailLevel, setRenderDetailLevel] = React.useState("full");
     const [activeInteractionFocus, setActiveInteractionFocus] = React.useState(null);
     const [activeDragHotspotKey, setActiveDragHotspotKey] = React.useState(null);
+    const [activeDragFieldName, setActiveDragFieldName] = React.useState(null);
     const [activeDragOverlayRect, setActiveDragOverlayRect] = React.useState(null);
     const [frozenDragFrame, setFrozenDragFrame] = React.useState(null);
+    const [frozenExternalLayout, setFrozenExternalLayout] = React.useState(null);
+    const [isInteractionOverlaySuppressed, setIsInteractionOverlaySuppressed] = React.useState(false);
     const [isMobileDragScrollLocked, setIsMobileDragScrollLocked] = React.useState(false);
     const [activeWheelFieldName, setActiveWheelFieldName] = React.useState(null);
     const [isCopyFlashing, setIsCopyFlashing] = React.useState(false);
@@ -334,18 +384,24 @@
       () => buildBoltFigureScene(visualState.spec, sceneOptions),
       [sceneOptions, visualState.spec]
     );
-    const renderFrame = frozenDragFrame || {
-      viewMinX: scene.viewMinX,
-      viewWidth: scene.viewWidth,
-      viewHeight: scene.viewHeight,
-      sideViewportWidth: scene.sideViewportWidth,
-      sideFramedScrollLeft: scene.sideFramedScrollLeft,
-    };
+    const renderFrame = (
+      frozenDragFrame ||
+      frozenExternalLayout?.frame ||
+      snapshotSceneFrame(scene)
+    );
     const dragHotspots = React.useMemo(() => buildDragHotspots(scene), [scene]);
     const wheelHotspots = React.useMemo(() => buildWheelHotspots(scene), [scene]);
+    const renderDragHotspots = (
+      frozenExternalLayout?.dragHotspots ||
+      dragHotspots
+    );
+    const renderWheelHotspots = (
+      frozenExternalLayout?.wheelHotspots ||
+      wheelHotspots
+    );
     const visibleDragHotspots = React.useMemo(() => {
       if (activeDragHotspotKey) {
-        return dragHotspots.filter((hotspot) => hotspot.key === activeDragHotspotKey);
+        return renderDragHotspots.filter((hotspot) => hotspot.key === activeDragHotspotKey);
       }
 
       if (activeWheelFieldName) {
@@ -353,22 +409,22 @@
       }
 
       if (activeInteractionFocus?.type === "drag" && activeInteractionFocus.hotspotKey) {
-        return dragHotspots.filter((hotspot) => hotspot.key === activeInteractionFocus.hotspotKey);
+        return renderDragHotspots.filter((hotspot) => hotspot.key === activeInteractionFocus.hotspotKey);
       }
 
       if (visualState.activeFieldName) {
-        return dragHotspots.filter((hotspot) => hotspot.fieldName === visualState.activeFieldName);
+        return renderDragHotspots.filter((hotspot) => hotspot.fieldName === visualState.activeFieldName);
       }
 
-      return dragHotspots;
-    }, [activeDragHotspotKey, activeInteractionFocus, activeWheelFieldName, dragHotspots, visualState.activeFieldName]);
+      return renderDragHotspots;
+    }, [activeDragHotspotKey, activeInteractionFocus, activeWheelFieldName, renderDragHotspots, visualState.activeFieldName]);
     const visibleWheelHotspots = React.useMemo(() => {
       if (activeDragHotspotKey) {
         return [];
       }
 
       if (activeWheelFieldName) {
-        return wheelHotspots.filter((hotspot) => hotspot.fieldName === activeWheelFieldName);
+        return renderWheelHotspots.filter((hotspot) => hotspot.fieldName === activeWheelFieldName);
       }
 
       if (activeInteractionFocus?.type === "drag") {
@@ -376,18 +432,36 @@
       }
 
       if (visualState.activeFieldName) {
-        return wheelHotspots.filter((hotspot) => hotspot.fieldName === visualState.activeFieldName);
+        return renderWheelHotspots.filter((hotspot) => hotspot.fieldName === visualState.activeFieldName);
       }
 
-      return wheelHotspots;
-    }, [activeDragHotspotKey, activeInteractionFocus, activeWheelFieldName, visualState.activeFieldName, wheelHotspots]);
+      return renderWheelHotspots;
+    }, [activeDragHotspotKey, activeInteractionFocus, activeWheelFieldName, renderWheelHotspots, visualState.activeFieldName]);
     const sceneRef = React.useRef(scene);
     const dragHotspotsRef = React.useRef(dragHotspots);
     const wheelHotspotsRef = React.useRef(wheelHotspots);
+    const frozenDragFrameRef = React.useRef(frozenDragFrame);
     const specRef = React.useRef(spec);
     const showTopViewRef = React.useRef(showTopView);
     const isMobileViewportRef = React.useRef(isMobileViewport);
     const hasDiscoveredMobileSwipeRef = React.useRef(hasDiscoveredMobileSwipe);
+
+    const clearMobileScrollTimer = React.useCallback(() => {
+      clearScheduledTimer(mobileScrollTimerRef);
+    }, []);
+
+    const clearProgrammaticScrollSettleTimer = React.useCallback(() => {
+      clearScheduledTimer(programmaticScrollSettleTimerRef);
+    }, []);
+
+    const clearProgrammaticScrollState = React.useCallback(() => {
+      programmaticScrollRef.current = null;
+      clearProgrammaticScrollSettleTimer();
+    }, [clearProgrammaticScrollSettleTimer]);
+
+    const isScrollTargetReached = React.useCallback((viewport, targetLeft) => (
+      Math.abs(viewport.scrollLeft - targetLeft) <= 1
+    ), []);
 
     React.useEffect(() => {
       if (typeof window === "undefined" || !window.matchMedia) {
@@ -422,6 +496,56 @@
         onStepAdjustField,
       };
     }, [onAdjustField, onStepAdjustField]);
+
+    const beginOverlayRefitSuppression = React.useCallback(() => {
+      setIsInteractionOverlaySuppressed(true);
+    }, []);
+
+    React.useLayoutEffect(() => {
+      if (frozenDragFrame) {
+        return;
+      }
+
+      if (externalFreezeFieldName) {
+        setFrozenExternalLayout((currentLayout) => (
+          currentLayout || snapshotOverlayLayout(
+            sceneRef.current,
+            dragHotspotsRef.current,
+            wheelHotspotsRef.current
+          )
+        ));
+        return;
+      }
+
+      if (frozenExternalLayout) {
+        const visualStateIsCurrent = (
+          visualState.spec === spec &&
+          visualState.showTopView === showTopView &&
+          visualState.activeFieldName === activeFieldName
+        );
+
+        if (!visualStateIsCurrent) {
+          return;
+        }
+
+        if (didSceneFrameChange(frozenExternalLayout.frame, snapshotSceneFrame(scene))) {
+          beginOverlayRefitSuppression();
+        }
+
+        setFrozenExternalLayout(null);
+        return;
+      }
+    }, [
+      activeFieldName,
+      beginOverlayRefitSuppression,
+      externalFreezeFieldName,
+      frozenDragFrame,
+      frozenExternalLayout,
+      scene,
+      showTopView,
+      spec,
+      visualState,
+    ]);
 
     React.useLayoutEffect(() => {
       latestVisualStateRef.current = {
@@ -489,10 +613,56 @@
         window.clearTimeout(copyFlashTimerRef.current);
       }
 
-      if (mobileScrollTimerRef.current != null) {
-        window.clearTimeout(mobileScrollTimerRef.current);
+      if (overlayRefitTimerRef.current != null) {
+        window.clearTimeout(overlayRefitTimerRef.current);
       }
+
+      clearMobileScrollTimer();
+      clearProgrammaticScrollSettleTimer();
     }, []);
+
+    React.useEffect(() => {
+      if (!isInteractionOverlaySuppressed || !contentRef.current) {
+        return undefined;
+      }
+
+      const content = contentRef.current;
+      const clearSuppression = () => {
+        if (overlayRefitTimerRef.current != null) {
+          window.clearTimeout(overlayRefitTimerRef.current);
+          overlayRefitTimerRef.current = null;
+        }
+
+        setIsInteractionOverlaySuppressed(false);
+      };
+      const handleTransitionEnd = (event) => {
+        if (
+          event.target !== content ||
+          (event.propertyName !== "width" && event.propertyName !== "padding-bottom")
+        ) {
+          return;
+        }
+
+        clearSuppression();
+      };
+
+      content.addEventListener("transitionend", handleTransitionEnd);
+      content.addEventListener("transitioncancel", handleTransitionEnd);
+      overlayRefitTimerRef.current = window.setTimeout(
+        clearSuppression,
+        OVERLAY_REFIT_SETTLE_MS
+      );
+
+      return () => {
+        content.removeEventListener("transitionend", handleTransitionEnd);
+        content.removeEventListener("transitioncancel", handleTransitionEnd);
+
+        if (overlayRefitTimerRef.current != null) {
+          window.clearTimeout(overlayRefitTimerRef.current);
+          overlayRefitTimerRef.current = null;
+        }
+      };
+    }, [isInteractionOverlaySuppressed]);
 
     React.useEffect(() => {
       if (!copyFlashNonce) {
@@ -553,11 +723,21 @@
       sceneRef.current = scene;
       dragHotspotsRef.current = dragHotspots;
       wheelHotspotsRef.current = wheelHotspots;
+      frozenDragFrameRef.current = frozenDragFrame;
       specRef.current = spec;
       showTopViewRef.current = showTopView;
       isMobileViewportRef.current = isMobileViewport;
       hasDiscoveredMobileSwipeRef.current = hasDiscoveredMobileSwipe;
-    }, [dragHotspots, hasDiscoveredMobileSwipe, isMobileViewport, scene, showTopView, spec, wheelHotspots]);
+    }, [
+      dragHotspots,
+      frozenDragFrame,
+      hasDiscoveredMobileSwipe,
+      isMobileViewport,
+      scene,
+      showTopView,
+      spec,
+      wheelHotspots,
+    ]);
 
     const markMobileSwipeDiscovered = React.useCallback(() => {
       if (hasDiscoveredMobileSwipeRef.current) {
@@ -576,7 +756,11 @@
 
     const getViewportMaxScrollLeft = React.useCallback(() => {
       const viewport = scrollViewportRef.current;
-      const scrollFrame = frozenDragFrame || scene;
+      const scrollFrame = (
+        frozenDragFrame ||
+        frozenExternalLayout?.frame ||
+        scene
+      );
 
       if (!viewport) {
         return scrollFrame.sideFramedScrollLeft;
@@ -593,7 +777,7 @@
       }
 
       return Math.max(0, viewport.scrollWidth - viewport.clientWidth);
-    }, [frozenDragFrame, scene]);
+    }, [frozenDragFrame, frozenExternalLayout, scene]);
 
     const getScrollTargetForViewState = React.useCallback((nextShowTopView) => (
       nextShowTopView ? 0 : getViewportMaxScrollLeft()
@@ -628,7 +812,7 @@
       const targetLeft = getScrollTargetForViewState(nextShowTopView);
 
       if (Math.abs(viewport.scrollLeft - targetLeft) < 1) {
-        programmaticScrollRef.current = null;
+        clearProgrammaticScrollState();
 
         if (syncState && nextShowTopView !== showTopViewRef.current) {
           onSetTopView?.(nextShowTopView);
@@ -641,6 +825,37 @@
         source,
         targetLeft,
       };
+
+      clearProgrammaticScrollSettleTimer();
+
+      programmaticScrollSettleTimerRef.current = window.setTimeout(() => {
+        programmaticScrollSettleTimerRef.current = null;
+
+        if (!scrollViewportRef.current) {
+          clearProgrammaticScrollState();
+          return;
+        }
+
+        const activeProgrammaticScroll = programmaticScrollRef.current;
+
+        if (!activeProgrammaticScroll) {
+          return;
+        }
+
+        if (isScrollTargetReached(scrollViewportRef.current, activeProgrammaticScroll.targetLeft)) {
+          clearProgrammaticScrollState();
+          return;
+        }
+
+        clearProgrammaticScrollState();
+        const shouldShowTopView = resolveShowTopViewFromScrollLeft(scrollViewportRef.current.scrollLeft);
+        requestViewState(shouldShowTopView, {
+          behavior: "smooth",
+          source: "programmatic-interrupt-recover",
+          syncState: true,
+        });
+      }, MOBILE_PROGRAMMATIC_SCROLL_SETTLE_MS);
+
       viewport.scrollTo({
         left: targetLeft,
         behavior,
@@ -649,7 +864,14 @@
       if (syncState && nextShowTopView !== showTopViewRef.current) {
         onSetTopView?.(nextShowTopView);
       }
-    }, [getScrollTargetForViewState, onSetTopView]);
+    }, [
+      clearProgrammaticScrollSettleTimer,
+      clearProgrammaticScrollState,
+      getScrollTargetForViewState,
+      isScrollTargetReached,
+      onSetTopView,
+      resolveShowTopViewFromScrollLeft,
+    ]);
 
     const syncViewportToViewStateImmediately = React.useCallback((nextShowTopView) => {
       if (!isMobileViewportRef.current || programmaticScrollRef.current) {
@@ -742,9 +964,7 @@
       };
 
       const scheduleScrollSync = () => {
-        if (mobileScrollTimerRef.current != null) {
-          window.clearTimeout(mobileScrollTimerRef.current);
-        }
+        clearMobileScrollTimer();
 
         mobileScrollTimerRef.current = window.setTimeout(() => {
           mobileScrollTimerRef.current = null;
@@ -756,8 +976,8 @@
         const activeProgrammaticScroll = programmaticScrollRef.current;
 
         if (activeProgrammaticScroll) {
-          if (Math.abs(viewport.scrollLeft - activeProgrammaticScroll.targetLeft) <= 1) {
-            programmaticScrollRef.current = null;
+          if (isScrollTargetReached(viewport, activeProgrammaticScroll.targetLeft)) {
+            clearProgrammaticScrollState();
           }
 
           return;
@@ -776,17 +996,16 @@
       const handleScrollEnd = () => {
         const activeProgrammaticScroll = programmaticScrollRef.current;
 
-        if (mobileScrollTimerRef.current != null) {
-          window.clearTimeout(mobileScrollTimerRef.current);
-          mobileScrollTimerRef.current = null;
-        }
+        clearMobileScrollTimer();
 
         if (activeProgrammaticScroll) {
-          if (Math.abs(viewport.scrollLeft - activeProgrammaticScroll.targetLeft) <= 1) {
-            programmaticScrollRef.current = null;
+          if (isScrollTargetReached(viewport, activeProgrammaticScroll.targetLeft)) {
+            clearProgrammaticScrollState();
+
+            return;
           }
 
-          return;
+          clearProgrammaticScrollState();
         }
 
         syncTopViewStateFromScroll();
@@ -796,16 +1015,18 @@
       viewport.addEventListener("scrollend", handleScrollEnd);
 
       return () => {
-        if (mobileScrollTimerRef.current != null) {
-          window.clearTimeout(mobileScrollTimerRef.current);
-          mobileScrollTimerRef.current = null;
-        }
+        clearMobileScrollTimer();
+        clearProgrammaticScrollSettleTimer();
 
         viewport.removeEventListener("scroll", handleScroll);
         viewport.removeEventListener("scrollend", handleScrollEnd);
       };
     }, [
+      clearMobileScrollTimer,
+      clearProgrammaticScrollSettleTimer,
+      clearProgrammaticScrollState,
       getScrollTargetForViewState,
+      isScrollTargetReached,
       isMobileViewport,
       markMobileSwipeDiscovered,
       requestViewState,
@@ -900,6 +1121,7 @@
         }
 
         dragPendingRef.current = null;
+        setActiveDragFieldName(null);
         setActiveDragOverlayRect(null);
         setFrozenDragFrame(null);
         setIsMobileDragScrollLocked(false);
@@ -1065,6 +1287,7 @@
       const clearActiveDrag = () => {
         clearDebouncedDragUpdate();
         setActiveDragHotspotKey(null);
+        setActiveDragFieldName(null);
         setActiveDragOverlayRect(null);
         setFrozenDragFrame(null);
         setIsMobileDragScrollLocked(false);
@@ -1110,6 +1333,7 @@
           usesVirtualOverlay: pending.usesVirtualOverlay,
           crossCenterScreen: pending.crossCenterScreen,
         };
+        setActiveDragFieldName(pending.fieldName);
         appendDragTraceEvent("activate", {
           hotspotKey: pending.hotspotKey,
           fieldName: pending.fieldName,
@@ -1119,13 +1343,7 @@
           maxValue: pending.maxValue,
           usesVirtualOverlay: pending.usesVirtualOverlay,
         });
-        setFrozenDragFrame({
-          viewMinX: sceneRef.current.viewMinX,
-          viewWidth: sceneRef.current.viewWidth,
-          viewHeight: sceneRef.current.viewHeight,
-          sideViewportWidth: sceneRef.current.sideViewportWidth,
-          sideFramedScrollLeft: sceneRef.current.sideFramedScrollLeft,
-        });
+        setFrozenDragFrame(snapshotSceneFrame(sceneRef.current));
         setActiveDragHotspotKey(pending.hotspotKey);
         setActiveDragOverlayRect(pending.usesVirtualOverlay ? pending.overlayRect : null);
         dragPendingRef.current = null;
@@ -1243,6 +1461,7 @@
         const hotspotKey = dragZone.getAttribute("data-hotspot-key");
         const fieldName = dragZone.getAttribute("data-field-name");
         const axis = dragZone.getAttribute("data-axis") || "horizontal";
+        setActiveDragFieldName(fieldName);
         const stepSize = FIELD_STEP_MAP[fieldName] || 1;
         const bounds = getFieldBounds(specRef.current, fieldName);
         const currentScene = sceneRef.current;
@@ -1597,6 +1816,15 @@
 
         if (hadActiveDrag) {
           flushDebouncedDragUpdate(event.pointerId);
+
+          const nextSceneFrame = snapshotSceneFrame(
+            buildSceneForCurrentLayout(specRef.current)
+          );
+
+          if (didSceneFrameChange(frozenDragFrameRef.current, nextSceneFrame)) {
+            beginOverlayRefitSuppression();
+          }
+
           clearActiveDrag();
         }
 
@@ -1624,7 +1852,14 @@
         container.removeEventListener("pointercancel", handlePointerEnd);
         container.removeEventListener("lostpointercapture", handlePointerEnd);
       };
-    }, [markActiveWheelField, markHighChurn, onDismissField, onSelectField, triggerConstraintFlash]);
+    }, [
+      beginOverlayRefitSuppression,
+      markActiveWheelField,
+      markHighChurn,
+      onDismissField,
+      onSelectField,
+      triggerConstraintFlash,
+    ]);
 
     const viewportSceneWidth = isMobileViewport ? renderFrame.sideViewportWidth : renderFrame.viewWidth;
     const contentWidthPercent = (renderFrame.viewWidth / viewportSceneWidth) * 100;
@@ -1641,6 +1876,32 @@
       });
     };
     const shouldShowCornerToggle = !isMobileViewport || !hasDiscoveredMobileSwipe;
+    const shouldHideInteractionOverlay = (
+      isInteractionOverlaySuppressed ||
+      Boolean(externalFreezeFieldName)
+    );
+    const mobileReadoutFieldName = isMobileViewport
+      ? (activeDragFieldName || activeWheelFieldName || null)
+      : null;
+    const mobileReadoutField = mobileReadoutFieldName
+      ? FIELD_CONFIG_MAP[mobileReadoutFieldName] || null
+      : null;
+    const mobileReadoutValue = React.useMemo(() => {
+      if (!mobileReadoutFieldName || !mobileReadoutField) {
+        return null;
+      }
+
+      const rawValue = Number(spec[mobileReadoutFieldName]);
+
+      if (!Number.isFinite(rawValue)) {
+        return null;
+      }
+
+      const decimals = getStepDecimals(mobileReadoutField.step);
+      const unitSuffix = mobileReadoutField.unit ? ` ${mobileReadoutField.unit}` : "";
+
+      return `${rawValue.toFixed(decimals)}${unitSuffix}`;
+    }, [mobileReadoutField, mobileReadoutFieldName, spec]);
 
     return (
       <div
@@ -1672,16 +1933,27 @@
             aria-hidden="true"
           />
         ) : null}
+        {mobileReadoutValue ? (
+          <div className="figure-mobile-readout" aria-hidden="true">
+            <div className="figure-mobile-readout-label">
+              {mobileReadoutField.label}
+            </div>
+            <div className="figure-mobile-readout-value">
+              {mobileReadoutValue}
+            </div>
+          </div>
+        ) : null}
         <div
           ref={scrollViewportRef}
           className="figure-scroll-viewport"
         >
           <div
             ref={contentRef}
-          className="figure-scroll-content"
-          style={{
+            className="figure-scroll-content"
+            style={{
               width: `${contentWidthPercent}%`,
-          }}
+              paddingBottom: `${(renderFrame.viewHeight / viewportSceneWidth) * 100}%`,
+            }}
           >
             <div className="figure-svg-layer">
               <BoltFigureSvg
@@ -1691,8 +1963,13 @@
                 frameHeight={renderFrame.viewHeight}
               />
             </div>
-            <div className="figure-interaction-overlay" aria-hidden="true">
-              {visibleWheelHotspots.map((hotspot) => (
+            <div
+              className={`figure-interaction-overlay ${
+                shouldHideInteractionOverlay ? "is-suppressed" : ""
+              }`}
+              aria-hidden="true"
+            >
+              {!shouldHideInteractionOverlay ? visibleWheelHotspots.map((hotspot) => (
                 <div
                   key={hotspot.key}
                   className={`figure-wheel-hotspot ${
@@ -1718,8 +1995,8 @@
                     }}
                   />
                 </div>
-              ))}
-              {visibleDragHotspots.map((hotspot) => (
+              )) : null}
+              {!shouldHideInteractionOverlay ? visibleDragHotspots.map((hotspot) => (
                 (() => {
                   const hotspotStyle = activeDragOverlayRect && activeDragHotspotKey === hotspot.key
                     ? {
@@ -1747,7 +2024,7 @@
                 />
                   );
                 })()
-              ))}
+              )) : null}
             </div>
           </div>
         </div>

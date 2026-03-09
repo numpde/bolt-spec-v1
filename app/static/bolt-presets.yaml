@@ -7,6 +7,7 @@ presets:
   m4:
     displayName: Coarse M4
     presetName: M4
+    standardProfileKey: iso-metric-262
     nominalDiameterMm: 4.0
     pitchMm: 0.7
     underHeadLengthMm: 18.0
@@ -19,6 +20,7 @@ presets:
   m5:
     displayName: Coarse M5
     presetName: M5
+    standardProfileKey: iso-metric-262
     nominalDiameterMm: 5.0
     pitchMm: 0.8
     underHeadLengthMm: 18.0
@@ -31,6 +33,7 @@ presets:
   m6:
     displayName: Coarse M6
     presetName: M6
+    standardProfileKey: iso-metric-262
     nominalDiameterMm: 6.0
     pitchMm: 1.0
     underHeadLengthMm: 18.0

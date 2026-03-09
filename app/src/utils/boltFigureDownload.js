@@ -57,14 +57,15 @@
     return `bolt-${checkpointLabel}-d${nominal}-l${length}`;
   };
 
-  const downloadCheckpointFigure = async (checkpointLike) => {
+  const downloadCheckpointFigure = async (checkpointLike, options = {}) => {
     const checkpoint = normalizeCheckpointState(checkpointLike);
+    const showTopView = options.showTopView !== false;
     const scene = buildBoltFigureScene(checkpoint.draftSpec, {
-      showTopView: checkpoint.showTopView,
+      showTopView,
       detailLevel: "full",
     });
     const svgMarkup = renderBoltFigureSvg(checkpoint.draftSpec, {
-      showTopView: checkpoint.showTopView,
+      showTopView,
       detailLevel: "full",
       includeWheelZones: false,
     });
