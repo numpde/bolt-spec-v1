@@ -90,8 +90,7 @@
       <section ref={trayRef} className="figure-control-tray">
         <div className="figure-control-tray-header">
           <div>
-            <p className="eyebrow">Quick adjust</p>
-            <h3>{field.label}</h3>
+            <p className="eyebrow">Quick adjust · {field.label}</p>
           </div>
           <button
             type="button"

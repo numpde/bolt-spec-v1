@@ -21,6 +21,9 @@
   const VISUAL_IDLE_WINDOW_MS = 56;
   const HIGH_CHURN_COOLDOWN_MS = 140;
   const WHEEL_ACTIVE_COOLDOWN_MS = 220;
+  const COPY_FLASH_MS = 620;
+  const SWIPE_TOGGLE_THRESHOLD_PX = 28;
+  const SWIPE_DIRECTION_RATIO = 1.25;
   const getGlobalWheelLockUntil = () => Number(globalThis.__BOLT_WHEEL_LOCK_UNTIL__ || 0);
   const lockGlobalWheelScroll = (ttlMs = WHEEL_LOCK_TTL_MS) => {
     globalThis.__BOLT_WHEEL_LOCK_UNTIL__ = Date.now() + ttlMs;
@@ -211,17 +214,21 @@
     onStepAdjustField,
     onSelectField,
     onDismissField,
+    onToggleTopView,
     activeFieldName = null,
+    copyFlashNonce = 0,
     showTopView = true,
   }) => {
     const containerRef = React.useRef(null);
     const wheelLockUntilRef = React.useRef(0);
     const dragPendingRef = React.useRef(null);
     const dragGestureRef = React.useRef(null);
+    const swipeGestureRef = React.useRef(null);
     const dragDebounceRef = React.useRef(null);
     const visualFrameRef = React.useRef(null);
     const churnCooldownTimerRef = React.useRef(null);
     const wheelActiveTimerRef = React.useRef(null);
+    const copyFlashTimerRef = React.useRef(null);
     const lastVisualCommitMsRef = React.useRef(-Infinity);
     const latestVisualStateRef = React.useRef({
       spec,
@@ -241,6 +248,7 @@
     const [activeInteractionFocus, setActiveInteractionFocus] = React.useState(null);
     const [activeDragHotspotKey, setActiveDragHotspotKey] = React.useState(null);
     const [activeWheelFieldName, setActiveWheelFieldName] = React.useState(null);
+    const [isCopyFlashing, setIsCopyFlashing] = React.useState(false);
 
     const scene = React.useMemo(
       () => buildBoltFigureScene(visualState.spec, {
@@ -361,7 +369,27 @@
       if (wheelActiveTimerRef.current != null) {
         window.clearTimeout(wheelActiveTimerRef.current);
       }
+
+      if (copyFlashTimerRef.current != null) {
+        window.clearTimeout(copyFlashTimerRef.current);
+      }
     }, []);
+
+    React.useEffect(() => {
+      if (!copyFlashNonce) {
+        return;
+      }
+
+      if (copyFlashTimerRef.current != null) {
+        window.clearTimeout(copyFlashTimerRef.current);
+      }
+
+      setIsCopyFlashing(true);
+      copyFlashTimerRef.current = window.setTimeout(() => {
+        setIsCopyFlashing(false);
+        copyFlashTimerRef.current = null;
+      }, COPY_FLASH_MS);
+    }, [copyFlashNonce]);
 
     const markHighChurn = React.useCallback((interactionFocus = null) => {
       setRenderDetailLevel("fast");
@@ -581,6 +609,10 @@
         dragGestureRef.current = null;
       };
 
+      const clearSwipeGesture = () => {
+        swipeGestureRef.current = null;
+      };
+
       const activatePendingDrag = () => {
         const pending = dragPendingRef.current;
 
@@ -784,8 +816,13 @@
 
         const wheelZone = event.target.closest(".figure-wheel-hotspot");
         const dragZone = event.target.closest(".figure-drag-hotspot");
+        const topViewToggle = event.target.closest(".figure-corner-toggle");
 
         if (wheelZone) {
+          return;
+        }
+
+        if (topViewToggle) {
           return;
         }
 
@@ -794,9 +831,19 @@
             return;
           }
 
-          console.log("Drag hotspot:", dragZone.getAttribute("data-hotspot-key"));
           beginDrag(event, dragZone, isMousePointer ? 0 : DRAG_HOLD_MS);
           return;
+        }
+
+        if (!isMousePointer && (event.pointerType === "touch" || event.pointerType === "pen")) {
+          swipeGestureRef.current = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            handled: false,
+          };
+        } else {
+          clearSwipeGesture();
         }
 
         clearPendingDrag();
@@ -821,6 +868,33 @@
           }
 
           scheduleDebouncedDragUpdate(event);
+          return;
+        }
+
+        const swipeGesture = swipeGestureRef.current;
+
+        if (swipeGesture?.pointerId === event.pointerId && !swipeGesture.handled) {
+          const deltaX = event.clientX - swipeGesture.startX;
+          const deltaY = event.clientY - swipeGesture.startY;
+          const absDeltaX = Math.abs(deltaX);
+          const absDeltaY = Math.abs(deltaY);
+
+          if (
+            absDeltaX >= SWIPE_TOGGLE_THRESHOLD_PX &&
+            absDeltaX > absDeltaY * SWIPE_DIRECTION_RATIO
+          ) {
+            swipeGesture.handled = true;
+
+            if (event.cancelable) {
+              event.preventDefault();
+            }
+
+            if (deltaX > 0 && !showTopViewRef.current) {
+              onToggleTopView?.();
+            } else if (deltaX < 0 && showTopViewRef.current) {
+              onToggleTopView?.();
+            }
+          }
         }
       };
 
@@ -832,6 +906,10 @@
         if (dragGestureRef.current?.pointerId === event.pointerId) {
           flushDebouncedDragUpdate(event.pointerId);
           clearActiveDrag();
+        }
+
+        if (swipeGestureRef.current?.pointerId === event.pointerId) {
+          clearSwipeGesture();
         }
       };
 
@@ -845,6 +923,7 @@
       return () => {
         clearPendingDrag();
         clearActiveDrag();
+        clearSwipeGesture();
         clearDebouncedDragUpdate();
         container.removeEventListener("wheel", handleWheel);
         container.removeEventListener("pointerdown", handlePointerDown);
@@ -858,8 +937,22 @@
     return (
       <div
         ref={containerRef}
-        className="figure-wrap"
+        className={`figure-wrap ${isCopyFlashing ? "is-copy-flashing" : ""}`}
       >
+        <button
+          type="button"
+          className={`figure-corner-toggle ${showTopView ? "is-active" : ""}`}
+          aria-label={showTopView ? "Hide top view" : "Show top view"}
+          aria-pressed={showTopView}
+          title={showTopView ? "Hide top view" : "Show top view"}
+          onClick={onToggleTopView}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3.5" y="5" width="17" height="14" rx="2.5" className="figure-corner-toggle-frame" />
+            <path d="M9.5 5v14" className="figure-corner-toggle-divider" />
+            <rect x="5.25" y="6.75" width="3.25" height="10.5" rx="1.2" className="figure-corner-toggle-panel" />
+          </svg>
+        </button>
         <div className="figure-svg-layer">
           <BoltFigureSvg scene={scene} />
         </div>

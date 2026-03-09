@@ -7,6 +7,7 @@
     normalizeBoltSpec,
     getThreadedLengthMaxMm,
     BOLT_FIELDS,
+    downloadCheckpointFigure,
     normalizeCheckpointState,
     buildCheckpointUrl,
     parseCheckpointFromLocation,
@@ -14,14 +15,41 @@
     extractCheckpointFromHistoryState,
   } = window;
   const {
-    CheckpointCard,
     FieldControlTray,
+    LikedBoltsCard,
     PresetPicker,
     ParameterPanel,
     BoltFigure,
   } = window;
   const EDITABLE_FIELD_NAMES = BOLT_FIELDS.map((field) => field.name);
   const fieldMap = Object.fromEntries(BOLT_FIELDS.map((field) => [field.name, field]));
+  const COPY_FEEDBACK_MS = 1400;
+
+  const copyTextToClipboard = async (text) => {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    const textarea = document.createElement("textarea");
+
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    textarea.style.pointerEvents = "none";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    try {
+      if (!document.execCommand("copy")) {
+        throw new Error("Clipboard copy was rejected.");
+      }
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  };
 
   const getMatchingPresetKey = (draftLikeSpec) => {
     const normalizedDraftSpec = normalizeBoltSpec(draftLikeSpec);
@@ -62,7 +90,11 @@
     const [draftSpec, setDraftSpec] = React.useState(initialAppState.draftSpec);
     const [showTopView, setShowTopView] = React.useState(initialAppState.showTopView);
     const [activeFieldName, setActiveFieldName] = React.useState(null);
+    const [copyState, setCopyState] = React.useState("idle");
+    const [copyFlashNonce, setCopyFlashNonce] = React.useState(0);
     const pendingHistorySyncRef = React.useRef(null);
+    const copyFeedbackTimerRef = React.useRef(null);
+    const lastPointerCopyAtRef = React.useRef(-Infinity);
     const deferredDraftSpec = React.useDeferredValue(draftSpec);
     const spec = React.useMemo(() => normalizeBoltSpec(draftSpec), [draftSpec]);
     const activePresetKey = React.useMemo(
@@ -208,6 +240,12 @@
       cancelPendingHistorySync();
     }, [cancelPendingHistorySync]);
 
+    React.useEffect(() => () => {
+      if (copyFeedbackTimerRef.current) {
+        window.clearTimeout(copyFeedbackTimerRef.current);
+      }
+    }, []);
+
     const handlePresetSelect = React.useCallback((nextPresetName) => {
       const currentCheckpoint = buildCurrentAppState();
       flushPendingHistorySync(currentCheckpoint);
@@ -228,12 +266,20 @@
       showTopView,
     ]);
 
-    const handleCheckpoint = React.useCallback(() => {
+    const handleLikedCheckpointSelect = React.useCallback((checkpointLike) => {
       const currentCheckpoint = buildCurrentAppState();
-
       flushPendingHistorySync(currentCheckpoint);
-      commitCheckpointToHistory("push", currentCheckpoint);
-    }, [buildCurrentAppState, commitCheckpointToHistory, flushPendingHistorySync]);
+
+      const nextCheckpoint = normalizeCheckpointState(checkpointLike);
+
+      commitCheckpointToHistory("push", nextCheckpoint);
+      applyAppState(nextCheckpoint);
+    }, [
+      applyAppState,
+      buildCurrentAppState,
+      commitCheckpointToHistory,
+      flushPendingHistorySync,
+    ]);
 
     const handleFieldChange = React.useCallback((fieldName, nextValue) => {
       setDraftSpec((current) => coerceDraftSpec({
@@ -287,9 +333,9 @@
     const deferredActiveFieldBounds = activeFieldName
       ? getFieldBounds(deferredDraftSpec, activeFieldName)
       : { min: 0, max: 0 };
-    const checkpointHref = buildCheckpointUrl(
-      buildCurrentAppState(),
-      window.location
+    const currentCheckpoint = React.useMemo(
+      () => buildCurrentAppState(),
+      [buildCurrentAppState]
     );
 
     const handleApplySizeFamily = React.useCallback((sizePresetKey) => {
@@ -303,6 +349,54 @@
     const handleCloseActiveField = React.useCallback(() => {
       setActiveFieldName(null);
     }, []);
+
+    const handleDownloadCurrentFigure = React.useCallback(async () => {
+      await downloadCheckpointFigure(currentCheckpoint);
+    }, [currentCheckpoint]);
+
+    const triggerCopyFlash = React.useCallback(() => {
+      setCopyFlashNonce((current) => current + 1);
+    }, []);
+
+    const handleCopyCurrentLink = React.useCallback(async () => {
+      const relativeUrl = buildCheckpointUrl(currentCheckpoint, window.location);
+      const absoluteUrl = new URL(relativeUrl, window.location.href).href;
+
+      if (copyFeedbackTimerRef.current) {
+        window.clearTimeout(copyFeedbackTimerRef.current);
+        copyFeedbackTimerRef.current = null;
+      }
+
+      try {
+        await copyTextToClipboard(absoluteUrl);
+        setCopyState("idle");
+        triggerCopyFlash();
+      } catch (error) {
+        setCopyState("failed");
+
+        copyFeedbackTimerRef.current = window.setTimeout(() => {
+          setCopyState("idle");
+          copyFeedbackTimerRef.current = null;
+        }, COPY_FEEDBACK_MS);
+      }
+    }, [currentCheckpoint, triggerCopyFlash]);
+
+    const handleCopyPointerDown = React.useCallback((event) => {
+      if (event.button != null && event.button !== 0) {
+        return;
+      }
+
+      lastPointerCopyAtRef.current = Date.now();
+      void handleCopyCurrentLink();
+    }, [handleCopyCurrentLink]);
+
+    const handleCopyClick = React.useCallback(() => {
+      if (Date.now() - lastPointerCopyAtRef.current < 700) {
+        return;
+      }
+
+      void handleCopyCurrentLink();
+    }, [handleCopyCurrentLink]);
 
     const handleActiveTraySliderChange = React.useCallback((nextValue) => {
       if (!activeFieldName) {
@@ -324,23 +418,24 @@
       <div className="app-shell">
         <main className="preview-column">
           <section className="preview-card">
-            <div className="card-heading">
-              <div>
-                <p className="eyebrow">Shared geometry state</p>
-                <h2>Live views</h2>
-              </div>
-              <div className="card-heading-actions">
+            <div className="panel-toolbar">
+              <p className="eyebrow">BYOB -- build your own bolt</p>
+              <div className="panel-toolbar-actions">
                 <button
                   type="button"
-                  className={`toggle-chip ${showTopView ? "is-active" : ""}`}
-                  onClick={() => setShowTopView((current) => !current)}
-                  aria-pressed={showTopView}
+                  className="panel-toolbar-button"
+                  onClick={handleDownloadCurrentFigure}
                 >
-                  Top view {showTopView ? "on" : "off"}
+                  Download sketch
                 </button>
-                <p className="status-chip">
-                  {spec.driveLabel} socket · {spec.nominalDiameterMm.toFixed(1)} mm
-                </p>
+                <button
+                  type="button"
+                  className={`panel-toolbar-button ${copyState === "failed" ? "is-failed" : ""}`}
+                  onPointerDown={handleCopyPointerDown}
+                  onClick={handleCopyClick}
+                >
+                  Copy link
+                </button>
               </div>
             </div>
             <BoltFigure
@@ -349,7 +444,9 @@
               onStepAdjustField={handleFieldStepAdjust}
               onSelectField={setActiveFieldName}
               onDismissField={handleCloseActiveField}
+              onToggleTopView={() => setShowTopView((current) => !current)}
               activeFieldName={activeFieldName}
+              copyFlashNonce={copyFlashNonce}
               showTopView={showTopView}
             />
             {activeField ? (
@@ -374,9 +471,9 @@
             onSelect={handlePresetSelect}
           />
 
-          <CheckpointCard
-            checkpointHref={checkpointHref}
-            onCheckpoint={handleCheckpoint}
+          <LikedBoltsCard
+            currentCheckpoint={currentCheckpoint}
+            onSelectCheckpoint={handleLikedCheckpointSelect}
           />
 
           <ParameterPanel

@@ -11,7 +11,6 @@
   const SpecSummaryImpl = ({ spec }) => (
     <section className="panel-card">
       <p className="eyebrow">Derived state</p>
-      <h2>Geometry summary</h2>
       <div className="summary-grid">
         {summaryMetrics(spec).map((metric) => (
           <div className="summary-metric" key={metric.label}>

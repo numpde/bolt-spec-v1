@@ -1,7 +1,7 @@
 (function() {
   const root = ReactDOM.createRoot(document.getElementById("root"));
 
-  const renderShellMessage = (title, copy) => {
+  const renderBootError = (copy) => {
     root.render(
       React.createElement(
         "div",
@@ -18,8 +18,7 @@
               React.createElement(
                 "div",
                 null,
-                React.createElement("p", { className: "eyebrow" }, "Preset catalog"),
-                React.createElement("h2", null, title)
+                React.createElement("p", { className: "eyebrow" }, "Preset catalog")
               )
             ),
             React.createElement("p", { className: "card-copy" }, copy)
@@ -30,15 +29,12 @@
   };
 
   const boot = async () => {
-    renderShellMessage("Loading...", "Reading the preset catalog from YAML.");
-
     try {
       await window.loadBoltPresetCatalog();
       root.render(React.createElement(window.App, null));
     } catch (error) {
       console.error("Failed to load bolt preset catalog", error);
-      renderShellMessage(
-        "Catalog load failed",
+      renderBootError(
         "The preset YAML could not be read. Check the console and the static file path."
       );
     }

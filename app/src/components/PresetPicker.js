@@ -1,28 +1,27 @@
 (function() {
-  const { BOLT_PRESETS } = window;
+  const { BOLT_PRESETS, CatalogList } = window;
 
-  const PresetPickerImpl = ({ selectedPreset, onSelect }) => (
-    <section className="panel-card">
-      <p className="eyebrow">Preset baselines</p>
-      <h2>Named presets</h2>
-      <p className="card-copy">
-        Start from a named baseline. Once you change any dimension, the state is
-        custom and no preset stays active.
-      </p>
-      <div className="preset-row">
-        {Object.entries(BOLT_PRESETS).map(([presetKey, preset]) => (
-          <button
-            key={presetKey}
-            className={`preset-button ${selectedPreset === presetKey ? "is-active" : ""}`}
-            type="button"
-            onClick={() => onSelect(presetKey)}
-          >
-            {preset.displayName || preset.presetName}
-          </button>
-        ))}
-      </div>
-    </section>
-  );
+  const PresetPickerImpl = ({ selectedPreset, onSelect }) => {
+    const items = Object.entries(BOLT_PRESETS).map(([presetKey, preset]) => ({
+      key: presetKey,
+      title: preset.displayName || preset.presetName,
+      meta: `${preset.presetName} · pitch ${Number(preset.pitchMm).toFixed(1)} mm`,
+      onClick: () => onSelect(presetKey),
+    }));
+
+    return (
+      <section className="panel-card">
+        <p className="eyebrow">Preset baselines</p>
+        <p className="card-copy">Start from a named baseline.</p>
+        <CatalogList
+          ariaLabel="Named presets"
+          items={items}
+          selectedKey={selectedPreset}
+          maxHeightPx={248}
+        />
+      </section>
+    );
+  };
 
   window.PresetPicker = React.memo(PresetPickerImpl);
 })();
