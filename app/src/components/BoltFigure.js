@@ -22,11 +22,24 @@
   const HIGH_CHURN_COOLDOWN_MS = 140;
   const WHEEL_ACTIVE_COOLDOWN_MS = 220;
   const COPY_FLASH_MS = 620;
-  const SWIPE_TOGGLE_THRESHOLD_PX = 28;
-  const SWIPE_DIRECTION_RATIO = 1.25;
+  const MOBILE_MEDIA_QUERY = "(max-width: 560px)";
+  const MOBILE_SCROLL_SNAP_DELAY_MS = 140;
+  const MOBILE_SWIPE_DISCOVERY_STORAGE_KEY = "bolt-mobile-swipe-discovered-v1";
+  const MOBILE_SWIPE_DISCOVERY_THRESHOLD_PX = 18;
   const getGlobalWheelLockUntil = () => Number(globalThis.__BOLT_WHEEL_LOCK_UNTIL__ || 0);
   const lockGlobalWheelScroll = (ttlMs = WHEEL_LOCK_TTL_MS) => {
     globalThis.__BOLT_WHEEL_LOCK_UNTIL__ = Date.now() + ttlMs;
+  };
+  const readMobileSwipeDiscovery = () => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    try {
+      return window.localStorage.getItem(MOBILE_SWIPE_DISCOVERY_STORAGE_KEY) === "1";
+    } catch (error) {
+      return false;
+    }
   };
 
   const quantizeStepCount = (delta, pixelsPerStep) => (
@@ -49,10 +62,17 @@
       : hotspot.x + hotspot.width / 2
   );
 
-  const projectScenePositionToScreen = (scenePosition, axis, scene, containerRect) => (
+  const getHotspotScreenRect = (hotspot, scene, contentRect) => ({
+    left: (hotspot.x / scene.viewWidth) * contentRect.width,
+    top: (hotspot.y / scene.viewHeight) * contentRect.height,
+    width: (hotspot.width / scene.viewWidth) * contentRect.width,
+    height: (hotspot.height / scene.viewHeight) * contentRect.height,
+  });
+
+  const projectScenePositionToScreen = (scenePosition, axis, scene, contentRect) => (
     axis === "vertical"
-      ? (scenePosition / scene.viewHeight) * containerRect.height
-      : (scenePosition / scene.viewWidth) * containerRect.width
+      ? contentRect.top + (scenePosition / scene.viewHeight) * contentRect.height
+      : contentRect.left + (scenePosition / scene.viewWidth) * contentRect.width
   );
 
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -69,6 +89,33 @@
     const rounded = anchor + stepCount * stepSize;
 
     return clamp(Number(rounded.toFixed(decimals)), min, max);
+  };
+
+  const buildSteppedValues = (minValue, maxValue, stepSize) => {
+    if (
+      !Number.isFinite(minValue) ||
+      !Number.isFinite(maxValue) ||
+      !Number.isFinite(stepSize) ||
+      stepSize <= 0
+    ) {
+      return [minValue];
+    }
+
+    const values = [];
+    const decimals = String(stepSize).includes(".")
+      ? String(stepSize).split(".")[1].length
+      : 0;
+    const stepCount = Math.max(0, Math.round((maxValue - minValue) / stepSize));
+
+    for (let index = 0; index <= stepCount; index += 1) {
+      values.push(Number((minValue + index * stepSize).toFixed(decimals)));
+    }
+
+    if (values[values.length - 1] !== maxValue) {
+      values.push(Number(maxValue.toFixed(decimals)));
+    }
+
+    return values;
   };
 
   const getFieldBounds = (spec, fieldName) => {
@@ -98,7 +145,7 @@
     return { min, max };
   };
 
-  const BoltFigureSvg = React.memo(({ scene }) => {
+  const BoltFigureSvg = React.memo(({ scene, frameWidth = null, frameHeight = null }) => {
     const {
       spec,
       viewWidth,
@@ -114,17 +161,19 @@
       threadLines,
       dimensions,
     } = scene;
+    const svgViewWidth = frameWidth || viewWidth;
+    const svgViewHeight = frameHeight || viewHeight;
 
     return (
       <svg
         className="figure-svg"
         xmlns="http://www.w3.org/2000/svg"
-        viewBox={`0 0 ${viewWidth} ${viewHeight}`}
+        viewBox={`0 0 ${svgViewWidth} ${svgViewHeight}`}
         role="img"
         aria-label={getBoltFigureAriaLabel(showTopView)}
       >
         <style>{FIGURE_SVG_STYLE}</style>
-        <rect x="0" y="0" width={viewWidth} height={viewHeight} fill="#f7f1e8" />
+        <rect x="0" y="0" width={svgViewWidth} height={svgViewHeight} fill="#f7f1e8" />
         <line className="figure-centerline" x1={centerline.x1} y1={centerline.y1} x2={centerline.x2} y2={centerline.y2} />
         <path className="figure-line" d={sideOutlinePath} />
         {threadLines.top.map((line, index) => (
@@ -214,21 +263,26 @@
     onStepAdjustField,
     onSelectField,
     onDismissField,
-    onToggleTopView,
+    onSetTopView,
     activeFieldName = null,
     copyFlashNonce = 0,
     showTopView = true,
   }) => {
     const containerRef = React.useRef(null);
+    const scrollViewportRef = React.useRef(null);
+    const contentRef = React.useRef(null);
     const wheelLockUntilRef = React.useRef(0);
+    const dragTraceRef = React.useRef(null);
     const dragPendingRef = React.useRef(null);
     const dragGestureRef = React.useRef(null);
-    const swipeGestureRef = React.useRef(null);
     const dragDebounceRef = React.useRef(null);
     const visualFrameRef = React.useRef(null);
     const churnCooldownTimerRef = React.useRef(null);
     const wheelActiveTimerRef = React.useRef(null);
     const copyFlashTimerRef = React.useRef(null);
+    const mobileScrollTimerRef = React.useRef(null);
+    const mobileLayoutSyncFrameRef = React.useRef(null);
+    const programmaticScrollRef = React.useRef(null);
     const lastVisualCommitMsRef = React.useRef(-Infinity);
     const latestVisualStateRef = React.useRef({
       spec,
@@ -247,16 +301,35 @@
     const [renderDetailLevel, setRenderDetailLevel] = React.useState("full");
     const [activeInteractionFocus, setActiveInteractionFocus] = React.useState(null);
     const [activeDragHotspotKey, setActiveDragHotspotKey] = React.useState(null);
+    const [activeDragOverlayRect, setActiveDragOverlayRect] = React.useState(null);
+    const [activeDragDebug, setActiveDragDebug] = React.useState(null);
+    const [frozenDragFrame, setFrozenDragFrame] = React.useState(null);
     const [activeWheelFieldName, setActiveWheelFieldName] = React.useState(null);
     const [isCopyFlashing, setIsCopyFlashing] = React.useState(false);
+    const [isMobileViewport, setIsMobileViewport] = React.useState(() => (
+      typeof window !== "undefined" && window.matchMedia
+        ? window.matchMedia(MOBILE_MEDIA_QUERY).matches
+        : false
+    ));
+    const [hasDiscoveredMobileSwipe, setHasDiscoveredMobileSwipe] = React.useState(
+      () => readMobileSwipeDiscovery()
+    );
+
+    const sceneOptions = React.useMemo(() => ({
+      showTopView: isMobileViewport ? true : visualState.showTopView,
+      detailLevel: renderDetailLevel,
+      layoutMode: isMobileViewport ? "mobile-scroll" : "default",
+    }), [isMobileViewport, renderDetailLevel, visualState.showTopView]);
 
     const scene = React.useMemo(
-      () => buildBoltFigureScene(visualState.spec, {
-        showTopView: visualState.showTopView,
-        detailLevel: renderDetailLevel,
-      }),
-      [visualState.spec, visualState.showTopView, renderDetailLevel]
+      () => buildBoltFigureScene(visualState.spec, sceneOptions),
+      [sceneOptions, visualState.spec]
     );
+    const renderFrame = frozenDragFrame || {
+      viewWidth: scene.viewWidth,
+      viewHeight: scene.viewHeight,
+      sideViewportWidth: scene.sideViewportWidth,
+    };
     const dragHotspots = React.useMemo(() => buildDragHotspots(scene), [scene]);
     const wheelHotspots = React.useMemo(() => buildWheelHotspots(scene), [scene]);
     const visibleDragHotspots = React.useMemo(() => {
@@ -299,8 +372,39 @@
     }, [activeDragHotspotKey, activeInteractionFocus, activeWheelFieldName, visualState.activeFieldName, wheelHotspots]);
     const sceneRef = React.useRef(scene);
     const dragHotspotsRef = React.useRef(dragHotspots);
+    const wheelHotspotsRef = React.useRef(wheelHotspots);
     const specRef = React.useRef(spec);
     const showTopViewRef = React.useRef(showTopView);
+    const isMobileViewportRef = React.useRef(isMobileViewport);
+    const hasDiscoveredMobileSwipeRef = React.useRef(hasDiscoveredMobileSwipe);
+
+    React.useEffect(() => {
+      if (typeof window === "undefined" || !window.matchMedia) {
+        return undefined;
+      }
+
+      const mediaQueryList = window.matchMedia(MOBILE_MEDIA_QUERY);
+      const handleChange = (event) => {
+        setIsMobileViewport(event.matches);
+      };
+
+      setIsMobileViewport(mediaQueryList.matches);
+
+      if (mediaQueryList.addEventListener) {
+        mediaQueryList.addEventListener("change", handleChange);
+
+        return () => {
+          mediaQueryList.removeEventListener("change", handleChange);
+        };
+      }
+
+      mediaQueryList.addListener(handleChange);
+
+      return () => {
+        mediaQueryList.removeListener(handleChange);
+      };
+    }, []);
+
     React.useEffect(() => {
       handlersRef.current = {
         onAdjustField,
@@ -373,6 +477,14 @@
       if (copyFlashTimerRef.current != null) {
         window.clearTimeout(copyFlashTimerRef.current);
       }
+
+      if (mobileScrollTimerRef.current != null) {
+        window.clearTimeout(mobileScrollTimerRef.current);
+      }
+
+      if (mobileLayoutSyncFrameRef.current != null) {
+        window.cancelAnimationFrame(mobileLayoutSyncFrameRef.current);
+      }
     }, []);
 
     React.useEffect(() => {
@@ -422,9 +534,259 @@
     React.useEffect(() => {
       sceneRef.current = scene;
       dragHotspotsRef.current = dragHotspots;
+      wheelHotspotsRef.current = wheelHotspots;
       specRef.current = spec;
       showTopViewRef.current = showTopView;
-    }, [scene, dragHotspots, spec, showTopView]);
+      isMobileViewportRef.current = isMobileViewport;
+      hasDiscoveredMobileSwipeRef.current = hasDiscoveredMobileSwipe;
+    }, [dragHotspots, hasDiscoveredMobileSwipe, isMobileViewport, scene, showTopView, spec, wheelHotspots]);
+
+    const markMobileSwipeDiscovered = React.useCallback(() => {
+      if (hasDiscoveredMobileSwipeRef.current) {
+        return;
+      }
+
+      hasDiscoveredMobileSwipeRef.current = true;
+      setHasDiscoveredMobileSwipe(true);
+
+      try {
+        window.localStorage.setItem(MOBILE_SWIPE_DISCOVERY_STORAGE_KEY, "1");
+      } catch (error) {
+        // Ignore storage failures; the in-memory state is enough for this session.
+      }
+    }, []);
+
+    const getViewportMaxScrollLeft = React.useCallback(() => {
+      const viewport = scrollViewportRef.current;
+
+      if (!viewport) {
+        return scene.sideFramedScrollLeft;
+      }
+
+      return Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+    }, [scene.sideFramedScrollLeft]);
+
+    const getScrollTargetForViewState = React.useCallback((nextShowTopView) => (
+      nextShowTopView ? 0 : getViewportMaxScrollLeft()
+    ), [getViewportMaxScrollLeft]);
+
+    const resolveShowTopViewFromScrollLeft = React.useCallback((scrollLeft) => (
+      scrollLeft <= getViewportMaxScrollLeft() / 2
+    ), [getViewportMaxScrollLeft]);
+
+    const requestViewState = React.useCallback((
+      nextShowTopView,
+      {
+        behavior = "auto",
+        syncState = true,
+        source = "unknown",
+      } = {}
+    ) => {
+      if (!isMobileViewportRef.current) {
+        if (syncState && nextShowTopView !== showTopViewRef.current) {
+          onSetTopView?.(nextShowTopView);
+        }
+
+        return;
+      }
+
+      const viewport = scrollViewportRef.current;
+
+      if (!viewport) {
+        return;
+      }
+
+      const targetLeft = getScrollTargetForViewState(nextShowTopView);
+
+      if (Math.abs(viewport.scrollLeft - targetLeft) < 1) {
+        programmaticScrollRef.current = null;
+
+        if (syncState && nextShowTopView !== showTopViewRef.current) {
+          onSetTopView?.(nextShowTopView);
+        }
+
+        return;
+      }
+
+      programmaticScrollRef.current = {
+        source,
+        targetLeft,
+      };
+      viewport.scrollTo({
+        left: targetLeft,
+        behavior,
+      });
+
+      if (syncState && nextShowTopView !== showTopViewRef.current) {
+        onSetTopView?.(nextShowTopView);
+      }
+    }, [getScrollTargetForViewState, onSetTopView]);
+
+    React.useEffect(() => {
+      if (!isMobileViewport) {
+        return undefined;
+      }
+
+      if (programmaticScrollRef.current) {
+        return undefined;
+      }
+
+      if (mobileLayoutSyncFrameRef.current != null) {
+        window.cancelAnimationFrame(mobileLayoutSyncFrameRef.current);
+      }
+
+      mobileLayoutSyncFrameRef.current = window.requestAnimationFrame(() => {
+        mobileLayoutSyncFrameRef.current = null;
+        requestViewState(showTopView, {
+          behavior: "auto",
+          source: "layout",
+          syncState: false,
+        });
+      });
+
+      return () => {
+        if (mobileLayoutSyncFrameRef.current != null) {
+          window.cancelAnimationFrame(mobileLayoutSyncFrameRef.current);
+          mobileLayoutSyncFrameRef.current = null;
+        }
+      };
+    }, [isMobileViewport, requestViewState, scene.sideFramedScrollLeft, showTopView]);
+
+    React.useEffect(() => {
+      if (
+        !isMobileViewport ||
+        !scrollViewportRef.current ||
+        !contentRef.current ||
+        typeof ResizeObserver === "undefined"
+      ) {
+        return undefined;
+      }
+
+      const viewport = scrollViewportRef.current;
+      const content = contentRef.current;
+      let rafId = null;
+
+      const scheduleLayoutSync = () => {
+        if (programmaticScrollRef.current) {
+          return;
+        }
+
+        if (rafId != null) {
+          window.cancelAnimationFrame(rafId);
+        }
+
+        rafId = window.requestAnimationFrame(() => {
+          rafId = null;
+          requestViewState(showTopViewRef.current, {
+            behavior: "auto",
+            source: "layout",
+            syncState: false,
+          });
+        });
+      };
+
+      const observer = new ResizeObserver(() => {
+        scheduleLayoutSync();
+      });
+
+      observer.observe(viewport);
+      observer.observe(content);
+
+      return () => {
+        observer.disconnect();
+
+        if (rafId != null) {
+          window.cancelAnimationFrame(rafId);
+        }
+      };
+    }, [isMobileViewport, requestViewState]);
+
+    React.useEffect(() => {
+      if (!isMobileViewport || !scrollViewportRef.current) {
+        return undefined;
+      }
+
+      const viewport = scrollViewportRef.current;
+
+      const syncTopViewStateFromScroll = () => {
+        const shouldShowTopView = resolveShowTopViewFromScrollLeft(viewport.scrollLeft);
+        requestViewState(shouldShowTopView, {
+          behavior: "smooth",
+          source: "settle",
+          syncState: true,
+        });
+      };
+
+      const scheduleScrollSync = () => {
+        if (mobileScrollTimerRef.current != null) {
+          window.clearTimeout(mobileScrollTimerRef.current);
+        }
+
+        mobileScrollTimerRef.current = window.setTimeout(() => {
+          mobileScrollTimerRef.current = null;
+          syncTopViewStateFromScroll();
+        }, MOBILE_SCROLL_SNAP_DELAY_MS);
+      };
+
+      const handleScroll = () => {
+        const activeProgrammaticScroll = programmaticScrollRef.current;
+
+        if (activeProgrammaticScroll) {
+          if (Math.abs(viewport.scrollLeft - activeProgrammaticScroll.targetLeft) <= 1) {
+            programmaticScrollRef.current = null;
+          }
+
+          return;
+        }
+
+        if (
+          Math.abs(viewport.scrollLeft - getScrollTargetForViewState(showTopViewRef.current)) >=
+          MOBILE_SWIPE_DISCOVERY_THRESHOLD_PX
+        ) {
+          markMobileSwipeDiscovered();
+        }
+
+        scheduleScrollSync();
+      };
+
+      const handleScrollEnd = () => {
+        const activeProgrammaticScroll = programmaticScrollRef.current;
+
+        if (mobileScrollTimerRef.current != null) {
+          window.clearTimeout(mobileScrollTimerRef.current);
+          mobileScrollTimerRef.current = null;
+        }
+
+        if (activeProgrammaticScroll) {
+          if (Math.abs(viewport.scrollLeft - activeProgrammaticScroll.targetLeft) <= 1) {
+            programmaticScrollRef.current = null;
+          }
+
+          return;
+        }
+
+        syncTopViewStateFromScroll();
+      };
+
+      viewport.addEventListener("scroll", handleScroll, { passive: true });
+      viewport.addEventListener("scrollend", handleScrollEnd);
+
+      return () => {
+        if (mobileScrollTimerRef.current != null) {
+          window.clearTimeout(mobileScrollTimerRef.current);
+          mobileScrollTimerRef.current = null;
+        }
+
+        viewport.removeEventListener("scroll", handleScroll);
+        viewport.removeEventListener("scrollend", handleScrollEnd);
+      };
+    }, [
+      getScrollTargetForViewState,
+      isMobileViewport,
+      markMobileSwipeDiscovered,
+      requestViewState,
+      resolveShowTopViewFromScrollLeft,
+    ]);
 
     React.useEffect(() => {
       const handleWindowWheel = (event) => {
@@ -468,6 +830,40 @@
         }
       };
 
+      const appendDragTraceEvent = (phase, payload = {}) => {
+        const trace = dragTraceRef.current;
+
+        if (!trace) {
+          return;
+        }
+
+        trace.events.push({
+          tMs: Number((performance.now() - trace.startedAtMs).toFixed(1)),
+          phase,
+          ...payload,
+        });
+      };
+
+      const flushDragTrace = (reason = "completed") => {
+        const trace = dragTraceRef.current;
+
+        if (!trace) {
+          return;
+        }
+
+        trace.reason = reason;
+        trace.durationMs = Number((performance.now() - trace.startedAtMs).toFixed(1));
+        dragTraceRef.current = null;
+
+        if (Array.isArray(window.__BOLT_DRAG_TRACES__)) {
+          window.__BOLT_DRAG_TRACES__.push(trace);
+        } else {
+          window.__BOLT_DRAG_TRACES__ = [trace];
+        }
+
+        console.log("Bolt drag trace", trace);
+      };
+
       const clearPendingDrag = () => {
         const pending = dragPendingRef.current;
 
@@ -480,6 +876,9 @@
         }
 
         dragPendingRef.current = null;
+        setActiveDragOverlayRect(null);
+        setActiveDragDebug(null);
+        setFrozenDragFrame(null);
       };
 
       const clearDebouncedDragUpdate = () => {
@@ -505,20 +904,25 @@
           const lowCenter = Math.min(gesture.minCenterScreen, gesture.maxCenterScreen);
           const highCenter = Math.max(gesture.minCenterScreen, gesture.maxCenterScreen);
           const clampedCenter = clamp(desiredCenterScreen, lowCenter, highCenter);
-          const centerRatio = (
-            clampedCenter - gesture.minCenterScreen
-          ) / (
-            gesture.maxCenterScreen - gesture.minCenterScreen
-          );
-          const rawValue = gesture.minValue + centerRatio * (
-            gesture.maxValue - gesture.minValue
-          );
-          desiredValue = roundToStep(
-            rawValue,
-            gesture.stepSize,
-            gesture.minValue,
-            gesture.maxValue
-          );
+          const nearestSample = (gesture.centerSamples || []).reduce((best, sample) => {
+            if (!best) {
+              return sample;
+            }
+
+            return Math.abs(sample.centerScreen - clampedCenter) <
+              Math.abs(best.centerScreen - clampedCenter)
+              ? sample
+              : best;
+          }, null);
+
+          desiredValue = nearestSample
+            ? nearestSample.value
+            : roundToStep(
+              gesture.currentValue,
+              gesture.stepSize,
+              gesture.minValue,
+              gesture.maxValue
+            );
         } else {
           const pointerAxisDeltaPx = pointerPositionPx - gesture.startPointerPositionPx;
           const signedAxisDelta = pointerAxisDeltaPx * gesture.directionFactor;
@@ -539,6 +943,10 @@
         );
 
         if (stepDelta === 0) {
+          appendDragTraceEvent("commit:no-step", {
+            pointerPositionPx: Number(pointerPositionPx.toFixed(2)),
+            currentValue: gesture.currentValue,
+          });
           return;
         }
 
@@ -547,6 +955,16 @@
           hotspotKey: gesture.hotspotKey,
         });
         gesture.currentValue = desiredValue;
+        appendDragTraceEvent("commit", {
+          pointerPositionPx: Number(pointerPositionPx.toFixed(2)),
+          desiredValue,
+          stepDelta,
+          usesVirtualOverlay: gesture.usesVirtualOverlay,
+        });
+        setActiveDragDebug((current) => current ? {
+          ...current,
+          currentValue: desiredValue,
+        } : current);
         handlersRef.current.onStepAdjustField?.(gesture.fieldName, stepDelta);
       };
 
@@ -601,6 +1019,9 @@
       const clearActiveDrag = () => {
         clearDebouncedDragUpdate();
         setActiveDragHotspotKey(null);
+        setActiveDragOverlayRect(null);
+        setActiveDragDebug(null);
+        setFrozenDragFrame(null);
 
         if (dragGestureRef.current?.pointerId != null) {
           releaseCapturedPointer(dragGestureRef.current.pointerId);
@@ -609,9 +1030,10 @@
         dragGestureRef.current = null;
       };
 
-      const clearSwipeGesture = () => {
-        swipeGestureRef.current = null;
-      };
+      const buildSceneForCurrentLayout = (nextSpec) => buildBoltFigureScene(nextSpec, {
+        showTopView: isMobileViewportRef.current ? true : showTopViewRef.current,
+        layoutMode: isMobileViewportRef.current ? "mobile-scroll" : "default",
+      });
 
       const activatePendingDrag = () => {
         const pending = dragPendingRef.current;
@@ -634,11 +1056,80 @@
           pointerOffsetPx: pending.pointerOffsetPx,
           minValue: pending.minValue,
           maxValue: pending.maxValue,
+          centerSamples: pending.centerSamples,
           minCenterScreen: pending.minCenterScreen,
           maxCenterScreen: pending.maxCenterScreen,
+          overlayRect: pending.overlayRect,
+          usesVirtualOverlay: pending.usesVirtualOverlay,
+          crossCenterScreen: pending.crossCenterScreen,
         };
+        appendDragTraceEvent("activate", {
+          hotspotKey: pending.hotspotKey,
+          fieldName: pending.fieldName,
+          axis: pending.axis,
+          currentValue: pending.currentValue,
+          minValue: pending.minValue,
+          maxValue: pending.maxValue,
+          usesVirtualOverlay: pending.usesVirtualOverlay,
+        });
+        setFrozenDragFrame({
+          viewWidth: sceneRef.current.viewWidth,
+          viewHeight: sceneRef.current.viewHeight,
+          sideViewportWidth: sceneRef.current.sideViewportWidth,
+        });
         setActiveDragHotspotKey(pending.hotspotKey);
+        setActiveDragOverlayRect(pending.usesVirtualOverlay ? pending.overlayRect : null);
+        setActiveDragDebug({
+          hotspotKey: pending.hotspotKey,
+          fieldName: pending.fieldName,
+          axis: pending.axis,
+          stepSize: pending.stepSize,
+          currentValue: pending.currentValue,
+          minValue: pending.minValue,
+          maxValue: pending.maxValue,
+          usesVirtualOverlay: pending.usesVirtualOverlay,
+          minCenterLocal: pending.minCenterLocal,
+          maxCenterLocal: pending.maxCenterLocal,
+          crossCenterLocal: pending.crossCenterLocal,
+          overlayRect: pending.usesVirtualOverlay ? pending.overlayRect : null,
+        });
         dragPendingRef.current = null;
+      };
+
+      const updateActiveDragOverlay = (gesture, pointerPositionPx) => {
+        if (!gesture?.usesVirtualOverlay || !gesture.overlayRect) {
+          return;
+        }
+
+        const lowCenter = Math.min(gesture.minCenterScreen, gesture.maxCenterScreen);
+        const highCenter = Math.max(gesture.minCenterScreen, gesture.maxCenterScreen);
+        const centerPositionPx = clamp(
+          pointerPositionPx - gesture.pointerOffsetPx,
+          lowCenter,
+          highCenter
+        );
+        const nextRect = gesture.axis === "vertical"
+          ? {
+            ...gesture.overlayRect,
+            left: gesture.crossCenterScreen - gesture.overlayRect.width / 2,
+            top: centerPositionPx - gesture.overlayRect.height / 2,
+          }
+          : {
+            ...gesture.overlayRect,
+            left: centerPositionPx - gesture.overlayRect.width / 2,
+            top: gesture.crossCenterScreen - gesture.overlayRect.height / 2,
+          };
+
+        setActiveDragOverlayRect(nextRect);
+        appendDragTraceEvent("overlay", {
+          centerPx: Number(centerPositionPx.toFixed(2)),
+          left: Number(nextRect.left.toFixed(2)),
+          top: Number(nextRect.top.toFixed(2)),
+        });
+        setActiveDragDebug((current) => current ? {
+          ...current,
+          overlayRect: nextRect,
+        } : current);
       };
 
       const estimateDragPixelsPerStep = (hotspotKey, fieldName, axis) => {
@@ -650,17 +1141,27 @@
 
         const currentScene = sceneRef.current;
         const currentHotspot = dragHotspotsRef.current.find((hotspot) => hotspot.key === hotspotKey);
+        const contentRect = contentRef.current?.getBoundingClientRect() ||
+          container.getBoundingClientRect();
 
         if (!currentScene || !currentHotspot) {
           return DEFAULT_DRAG_PIXELS_PER_STEP;
         }
+
+        const dragFrameMetrics = {
+          viewWidth: currentScene.viewWidth,
+          viewHeight: currentScene.viewHeight,
+        };
 
         const nextScene = buildBoltFigureScene(
           {
             ...specRef.current,
             [fieldName]: Number(specRef.current[fieldName]) + stepSize,
           },
-          { showTopView: showTopViewRef.current }
+          {
+            showTopView: isMobileViewportRef.current ? true : showTopViewRef.current,
+            layoutMode: isMobileViewportRef.current ? "mobile-scroll" : "default",
+          }
         );
         const nextHotspot = buildDragHotspots(nextScene).find((hotspot) => hotspot.key === hotspotKey);
 
@@ -668,20 +1169,19 @@
           return DEFAULT_DRAG_PIXELS_PER_STEP;
         }
 
-        const containerRect = container.getBoundingClientRect();
         const currentCenterScene = getHotspotCenterInScene(currentHotspot, axis);
         const nextCenterScene = getHotspotCenterInScene(nextHotspot, axis);
         const currentCenterScreen = projectScenePositionToScreen(
           currentCenterScene,
           axis,
-          currentScene,
-          containerRect
+          dragFrameMetrics,
+          contentRect
         );
         const nextCenterScreen = projectScenePositionToScreen(
           nextCenterScene,
           axis,
-          nextScene,
-          containerRect
+          dragFrameMetrics,
+          contentRect
         );
         const estimatedDeltaPx = Math.abs(nextCenterScreen - currentCenterScreen);
 
@@ -711,23 +1211,27 @@
         const bounds = getFieldBounds(specRef.current, fieldName);
         const currentScene = sceneRef.current;
         const currentHotspot = getHotspotByKey(dragHotspotsRef.current, hotspotKey);
-        const containerRect = container.getBoundingClientRect();
+        const contentRect = contentRef.current?.getBoundingClientRect() ||
+          container.getBoundingClientRect();
+        const dragFrameMetrics = currentScene
+          ? {
+            viewWidth: currentScene.viewWidth,
+            viewHeight: currentScene.viewHeight,
+          }
+          : null;
         const currentCenterScreen = currentHotspot && currentScene
           ? projectScenePositionToScreen(
             getHotspotCenterInScene(currentHotspot, axis),
             axis,
-            currentScene,
-            containerRect
+            dragFrameMetrics || currentScene,
+            contentRect
           )
           : axisPosition(event, axis);
-        const centerForValue = (targetValue) => {
-          const nextSpec = normalizeBoltSpec({
+        const directCenterForValue = (targetValue) => {
+          const nextScene = buildSceneForCurrentLayout(normalizeBoltSpec({
             ...specRef.current,
             [fieldName]: targetValue,
-          });
-          const nextScene = buildBoltFigureScene(nextSpec, {
-            showTopView: showTopViewRef.current,
-          });
+          }));
           const nextHotspot = getHotspotByKey(
             buildDragHotspots(nextScene),
             hotspotKey
@@ -740,12 +1244,113 @@
           return projectScenePositionToScreen(
             getHotspotCenterInScene(nextHotspot, axis),
             axis,
-            nextScene,
-            containerRect
+            dragFrameMetrics || nextScene,
+            contentRect
           );
         };
+        const centerForValue = (targetValue) => {
+          const nextScene = buildSceneForCurrentLayout(normalizeBoltSpec({
+            ...specRef.current,
+            [fieldName]: targetValue,
+          }));
+          const nextHotspot = getHotspotByKey(
+            buildDragHotspots(nextScene),
+            hotspotKey
+          );
+          const oppositeHotspotKey = hotspotKey.endsWith(":start")
+            ? hotspotKey.replace(/:start$/, ":end")
+            : hotspotKey.replace(/:end$/, ":start");
+          const currentOppositeHotspot = getHotspotByKey(
+            dragHotspotsRef.current,
+            oppositeHotspotKey
+          );
+          const nextOppositeHotspot = getHotspotByKey(
+            buildDragHotspots(nextScene),
+            oppositeHotspotKey
+          );
+
+          if (!nextHotspot) {
+            return currentCenterScreen;
+          }
+
+          const directCenter = directCenterForValue(targetValue);
+
+          if (Math.abs(directCenter - currentCenterScreen) > 0.5) {
+            return directCenter;
+          }
+
+          if (!currentOppositeHotspot || !nextOppositeHotspot) {
+            return currentCenterScreen;
+          }
+
+          const currentOppositeCenter = projectScenePositionToScreen(
+            getHotspotCenterInScene(currentOppositeHotspot, axis),
+            axis,
+            dragFrameMetrics || currentScene,
+            contentRect
+          );
+          const nextOppositeCenter = projectScenePositionToScreen(
+            getHotspotCenterInScene(nextOppositeHotspot, axis),
+            axis,
+            dragFrameMetrics || nextScene,
+            contentRect
+          );
+
+          return currentCenterScreen + (nextOppositeCenter - currentOppositeCenter);
+        };
+        const directMinCenterScreen = directCenterForValue(bounds.min);
+        const directMaxCenterScreen = directCenterForValue(bounds.max);
         const minCenterScreen = centerForValue(bounds.min);
         const maxCenterScreen = centerForValue(bounds.max);
+        const centerSamples = buildSteppedValues(bounds.min, bounds.max, stepSize).map((value) => ({
+          value,
+          centerScreen: centerForValue(value),
+        }));
+        const usesVirtualOverlay = Math.abs(directMaxCenterScreen - directMinCenterScreen) <= 0.5 &&
+          Math.abs(maxCenterScreen - minCenterScreen) > 0.5;
+        const overlayRect = currentHotspot && currentScene
+          ? getHotspotScreenRect(currentHotspot, currentScene, contentRect)
+          : null;
+        const crossCenterScreen = axis === "vertical"
+          ? (overlayRect ? overlayRect.left + overlayRect.width / 2 : event.clientX)
+          : (overlayRect ? overlayRect.top + overlayRect.height / 2 : event.clientY);
+
+        flushDragTrace("interrupted");
+        dragTraceRef.current = {
+          startedAtMs: performance.now(),
+          pointerId: event.pointerId,
+          pointerType: event.pointerType,
+          hotspotKey,
+          fieldName,
+          axis,
+          holdMs,
+          startValue: Number(specRef.current[fieldName]),
+          bounds: {
+            min: bounds.min,
+            max: bounds.max,
+          },
+          centers: {
+            directMin: Number(directMinCenterScreen.toFixed(2)),
+            directMax: Number(directMaxCenterScreen.toFixed(2)),
+            min: Number(minCenterScreen.toFixed(2)),
+            max: Number(maxCenterScreen.toFixed(2)),
+            current: Number(currentCenterScreen.toFixed(2)),
+          },
+          centerSampleCount: centerSamples.length,
+          overlayRect: overlayRect ? {
+            left: Number(overlayRect.left.toFixed(2)),
+            top: Number(overlayRect.top.toFixed(2)),
+            width: Number(overlayRect.width.toFixed(2)),
+            height: Number(overlayRect.height.toFixed(2)),
+          } : null,
+          events: [],
+        };
+        appendDragTraceEvent("pointerdown", {
+          clientX: Number((event.clientX ?? 0).toFixed(2)),
+          clientY: Number((event.clientY ?? 0).toFixed(2)),
+          pointerAxisPx: Number(axisPosition(event, axis).toFixed(2)),
+          usesVirtualOverlay,
+        });
 
         dragPendingRef.current = {
           pointerId: event.pointerId,
@@ -765,8 +1370,21 @@
           pointerOffsetPx: axisPosition(event, axis) - currentCenterScreen,
           minValue: bounds.min,
           maxValue: bounds.max,
+          centerSamples,
           minCenterScreen,
           maxCenterScreen,
+          minCenterLocal: axis === "vertical"
+            ? minCenterScreen - contentRect.top
+            : minCenterScreen - contentRect.left,
+          maxCenterLocal: axis === "vertical"
+            ? maxCenterScreen - contentRect.top
+            : maxCenterScreen - contentRect.left,
+          overlayRect,
+          usesVirtualOverlay,
+          crossCenterScreen,
+          crossCenterLocal: axis === "vertical"
+            ? crossCenterScreen - contentRect.left
+            : crossCenterScreen - contentRect.top,
           timerId: holdMs > 0
             ? window.setTimeout(() => {
               activatePendingDrag();
@@ -835,15 +1453,28 @@
           return;
         }
 
-        if (!isMousePointer && (event.pointerType === "touch" || event.pointerType === "pen")) {
-          swipeGestureRef.current = {
-            pointerId: event.pointerId,
-            startX: event.clientX,
-            startY: event.clientY,
-            handled: false,
-          };
-        } else {
-          clearSwipeGesture();
+        const contentRect = contentRef.current?.getBoundingClientRect();
+        const currentScene = sceneRef.current;
+
+        if (
+          contentRect &&
+          currentScene &&
+          contentRect.width > 0 &&
+          contentRect.height > 0
+        ) {
+          const sceneX = ((event.clientX - contentRect.left) / contentRect.width) * currentScene.viewWidth;
+          const sceneY = ((event.clientY - contentRect.top) / contentRect.height) * currentScene.viewHeight;
+          const hiddenWheelHotspot = wheelHotspotsRef.current.find((hotspot) => (
+            sceneX >= hotspot.hitX &&
+            sceneX <= hotspot.hitX + hotspot.hitWidth &&
+            sceneY >= hotspot.hitY &&
+            sceneY <= hotspot.hitY + hotspot.hitHeight
+          ));
+
+          if (hiddenWheelHotspot) {
+            onSelectField?.(hiddenWheelHotspot.fieldName);
+            return;
+          }
         }
 
         clearPendingDrag();
@@ -855,6 +1486,10 @@
         const pendingDrag = dragPendingRef.current;
 
         if (pendingDrag?.pointerId === event.pointerId) {
+          appendDragTraceEvent("move:pending", {
+            clientX: Number((event.clientX ?? 0).toFixed(2)),
+            clientY: Number((event.clientY ?? 0).toFixed(2)),
+          });
           if (event.cancelable) {
             event.preventDefault();
           }
@@ -863,53 +1498,48 @@
         }
 
         if (dragGestureRef.current?.pointerId === event.pointerId) {
+          appendDragTraceEvent("move:active", {
+            clientX: Number((event.clientX ?? 0).toFixed(2)),
+            clientY: Number((event.clientY ?? 0).toFixed(2)),
+            pointerAxisPx: Number(
+              axisPosition(event, dragGestureRef.current.axis).toFixed(2)
+            ),
+          });
           if (event.cancelable) {
             event.preventDefault();
           }
 
+          updateActiveDragOverlay(
+            dragGestureRef.current,
+            axisPosition(event, dragGestureRef.current.axis)
+          );
           scheduleDebouncedDragUpdate(event);
-          return;
-        }
-
-        const swipeGesture = swipeGestureRef.current;
-
-        if (swipeGesture?.pointerId === event.pointerId && !swipeGesture.handled) {
-          const deltaX = event.clientX - swipeGesture.startX;
-          const deltaY = event.clientY - swipeGesture.startY;
-          const absDeltaX = Math.abs(deltaX);
-          const absDeltaY = Math.abs(deltaY);
-
-          if (
-            absDeltaX >= SWIPE_TOGGLE_THRESHOLD_PX &&
-            absDeltaX > absDeltaY * SWIPE_DIRECTION_RATIO
-          ) {
-            swipeGesture.handled = true;
-
-            if (event.cancelable) {
-              event.preventDefault();
-            }
-
-            if (deltaX > 0 && !showTopViewRef.current) {
-              onToggleTopView?.();
-            } else if (deltaX < 0 && showTopViewRef.current) {
-              onToggleTopView?.();
-            }
-          }
         }
       };
 
       const handlePointerEnd = (event) => {
-        if (dragPendingRef.current?.pointerId === event.pointerId) {
+        const hadPendingDrag = dragPendingRef.current?.pointerId === event.pointerId;
+        const hadActiveDrag = dragGestureRef.current?.pointerId === event.pointerId;
+
+        if (hadPendingDrag || hadActiveDrag) {
+          appendDragTraceEvent("end", {
+            type: event.type,
+            clientX: Number((event.clientX ?? 0).toFixed(2)),
+            clientY: Number((event.clientY ?? 0).toFixed(2)),
+          });
+        }
+
+        if (hadPendingDrag) {
           clearPendingDrag();
         }
 
-        if (dragGestureRef.current?.pointerId === event.pointerId) {
+        if (hadActiveDrag) {
           flushDebouncedDragUpdate(event.pointerId);
           clearActiveDrag();
         }
 
-        if (swipeGestureRef.current?.pointerId === event.pointerId) {
-          clearSwipeGesture();
+        if (hadPendingDrag || hadActiveDrag) {
+          flushDragTrace(event.type);
         }
       };
 
@@ -921,9 +1551,9 @@
       container.addEventListener("lostpointercapture", handlePointerEnd, { passive: false });
 
       return () => {
+        flushDragTrace("effect-cleanup");
         clearPendingDrag();
         clearActiveDrag();
-        clearSwipeGesture();
         clearDebouncedDragUpdate();
         container.removeEventListener("wheel", handleWheel);
         container.removeEventListener("pointerdown", handlePointerDown);
@@ -932,74 +1562,192 @@
         container.removeEventListener("pointercancel", handlePointerEnd);
         container.removeEventListener("lostpointercapture", handlePointerEnd);
       };
-    }, [markActiveWheelField, markHighChurn, onDismissField]);
+    }, [markActiveWheelField, markHighChurn, onDismissField, onSelectField]);
+
+    const viewportSceneWidth = isMobileViewport ? renderFrame.sideViewportWidth : renderFrame.viewWidth;
+    const contentWidthPercent = (renderFrame.viewWidth / viewportSceneWidth) * 100;
+    const handleTopViewToggle = () => {
+      const viewport = scrollViewportRef.current;
+      const nextShowTopView = isMobileViewport && viewport
+        ? !resolveShowTopViewFromScrollLeft(viewport.scrollLeft)
+        : !showTopView;
+
+      requestViewState(nextShowTopView, {
+        behavior: "smooth",
+        source: "button",
+        syncState: true,
+      });
+    };
+    const shouldShowCornerToggle = !isMobileViewport || !hasDiscoveredMobileSwipe;
+    const dragDebugRangeStyle = activeDragDebug
+      ? activeDragDebug.axis === "vertical"
+        ? {
+          left: `${activeDragDebug.crossCenterLocal - 1}px`,
+          top: `${Math.min(activeDragDebug.minCenterLocal, activeDragDebug.maxCenterLocal)}px`,
+          width: "2px",
+          height: `${Math.abs(activeDragDebug.maxCenterLocal - activeDragDebug.minCenterLocal)}px`,
+        }
+        : {
+          left: `${Math.min(activeDragDebug.minCenterLocal, activeDragDebug.maxCenterLocal)}px`,
+          top: `${activeDragDebug.crossCenterLocal - 1}px`,
+          width: `${Math.abs(activeDragDebug.maxCenterLocal - activeDragDebug.minCenterLocal)}px`,
+          height: "2px",
+        }
+      : null;
 
     return (
       <div
         ref={containerRef}
-        className={`figure-wrap ${isCopyFlashing ? "is-copy-flashing" : ""}`}
+        className={`figure-wrap ${isCopyFlashing ? "is-copy-flashing" : ""} ${
+          isMobileViewport ? "is-mobile-scroll" : ""
+        }`}
       >
-        <button
-          type="button"
-          className={`figure-corner-toggle ${showTopView ? "is-active" : ""}`}
-          aria-label={showTopView ? "Hide top view" : "Show top view"}
-          aria-pressed={showTopView}
-          title={showTopView ? "Hide top view" : "Show top view"}
-          onClick={onToggleTopView}
+        {shouldShowCornerToggle ? (
+          <button
+            type="button"
+            className={`figure-corner-toggle ${showTopView ? "is-active" : ""}`}
+            aria-label={showTopView ? "Hide top view" : "Show top view"}
+            aria-pressed={showTopView}
+            title={showTopView ? "Hide top view" : "Show top view"}
+            onClick={handleTopViewToggle}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3.5" y="5" width="17" height="14" rx="2.5" className="figure-corner-toggle-frame" />
+              <path d="M9.5 5v14" className="figure-corner-toggle-divider" />
+              <rect x="5.25" y="6.75" width="3.25" height="10.5" rx="1.2" className="figure-corner-toggle-panel" />
+            </svg>
+          </button>
+        ) : null}
+        <div
+          ref={scrollViewportRef}
+          className="figure-scroll-viewport"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3.5" y="5" width="17" height="14" rx="2.5" className="figure-corner-toggle-frame" />
-            <path d="M9.5 5v14" className="figure-corner-toggle-divider" />
-            <rect x="5.25" y="6.75" width="3.25" height="10.5" rx="1.2" className="figure-corner-toggle-panel" />
-          </svg>
-        </button>
-        <div className="figure-svg-layer">
-          <BoltFigureSvg scene={scene} />
-        </div>
-        <div className="figure-interaction-overlay" aria-hidden="true">
-          {visibleWheelHotspots.map((hotspot) => (
-            <div
-              key={hotspot.key}
-              className={`figure-wheel-hotspot ${
-                hotspot.fieldName === visualState.activeFieldName ? "is-active" : ""
-              }`}
-              data-field-name={hotspot.fieldName}
-              onClick={() => onSelectField?.(hotspot.fieldName)}
-              style={{
-                left: `${(hotspot.hitX / scene.viewWidth) * 100}%`,
-                top: `${(hotspot.hitY / scene.viewHeight) * 100}%`,
-                width: `${(hotspot.hitWidth / scene.viewWidth) * 100}%`,
-                height: `${(hotspot.hitHeight / scene.viewHeight) * 100}%`,
-              }}
-            >
-              <span
-                className="figure-wheel-hotspot-pill"
-                aria-hidden="true"
-                style={{
-                  left: `${((hotspot.hintX - hotspot.hitX) / hotspot.hitWidth) * 100}%`,
-                  top: `${((hotspot.hintY - hotspot.hitY) / hotspot.hitHeight) * 100}%`,
-                  width: `${(hotspot.hintWidth / hotspot.hitWidth) * 100}%`,
-                  height: `${(hotspot.hintHeight / hotspot.hitHeight) * 100}%`,
-                }}
+          <div
+            ref={contentRef}
+          className="figure-scroll-content"
+          style={{
+              width: `${contentWidthPercent}%`,
+          }}
+          >
+            <div className="figure-svg-layer">
+              <BoltFigureSvg
+                scene={scene}
+                frameWidth={renderFrame.viewWidth}
+                frameHeight={renderFrame.viewHeight}
               />
             </div>
-          ))}
-          {visibleDragHotspots.map((hotspot) => (
-            <div
-              key={hotspot.key}
-              className="figure-drag-hotspot"
-              data-hotspot-key={hotspot.key}
-              data-field-name={hotspot.fieldName}
-              data-axis={hotspot.axis}
-              data-direction-factor={hotspot.directionFactor}
-              style={{
-                left: `${(hotspot.x / scene.viewWidth) * 100}%`,
-                top: `${(hotspot.y / scene.viewHeight) * 100}%`,
-                width: `${(hotspot.width / scene.viewWidth) * 100}%`,
-                height: `${(hotspot.height / scene.viewHeight) * 100}%`,
-              }}
-            />
-          ))}
+            <div className="figure-interaction-overlay" aria-hidden="true">
+              {activeDragDebug && dragDebugRangeStyle ? (
+                <>
+                  <div className="figure-drag-debug-range" style={dragDebugRangeStyle} />
+                  <div
+                    className="figure-drag-debug-bound figure-drag-debug-bound-start"
+                    style={
+                      activeDragDebug.axis === "vertical"
+                        ? {
+                          left: `${activeDragDebug.crossCenterLocal}px`,
+                          top: `${activeDragDebug.minCenterLocal}px`,
+                        }
+                        : {
+                          left: `${activeDragDebug.minCenterLocal}px`,
+                          top: `${activeDragDebug.crossCenterLocal}px`,
+                        }
+                    }
+                  />
+                  <div
+                    className="figure-drag-debug-bound figure-drag-debug-bound-end"
+                    style={
+                      activeDragDebug.axis === "vertical"
+                        ? {
+                          left: `${activeDragDebug.crossCenterLocal}px`,
+                          top: `${activeDragDebug.maxCenterLocal}px`,
+                        }
+                        : {
+                          left: `${activeDragDebug.maxCenterLocal}px`,
+                          top: `${activeDragDebug.crossCenterLocal}px`,
+                        }
+                    }
+                  />
+                  {activeDragDebug.overlayRect ? (
+                    <div
+                      className="figure-drag-debug-overlay"
+                      style={{
+                        left: `${activeDragDebug.overlayRect.left}px`,
+                        top: `${activeDragDebug.overlayRect.top}px`,
+                        width: `${activeDragDebug.overlayRect.width}px`,
+                        height: `${activeDragDebug.overlayRect.height}px`,
+                      }}
+                    />
+                  ) : null}
+                  <div className="figure-drag-debug-card">
+                    <div>{activeDragDebug.hotspotKey}</div>
+                    <div>
+                      {activeDragDebug.axis} · {activeDragDebug.usesVirtualOverlay ? "virtual" : "direct"}
+                    </div>
+                    <div>
+                      {activeDragDebug.minValue.toFixed(1)} / {activeDragDebug.currentValue.toFixed(1)} / {activeDragDebug.maxValue.toFixed(1)}
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              {visibleWheelHotspots.map((hotspot) => (
+                <div
+                  key={hotspot.key}
+                  className={`figure-wheel-hotspot ${
+                    hotspot.fieldName === visualState.activeFieldName ? "is-active" : ""
+                  }`}
+                  data-field-name={hotspot.fieldName}
+                  onClick={() => onSelectField?.(hotspot.fieldName)}
+                  style={{
+                    left: `${(hotspot.hitX / renderFrame.viewWidth) * 100}%`,
+                    top: `${(hotspot.hitY / renderFrame.viewHeight) * 100}%`,
+                    width: `${(hotspot.hitWidth / renderFrame.viewWidth) * 100}%`,
+                    height: `${(hotspot.hitHeight / renderFrame.viewHeight) * 100}%`,
+                  }}
+                >
+                  <span
+                    className="figure-wheel-hotspot-pill"
+                    aria-hidden="true"
+                    style={{
+                      left: `${((hotspot.hintX - hotspot.hitX) / hotspot.hitWidth) * 100}%`,
+                      top: `${((hotspot.hintY - hotspot.hitY) / hotspot.hitHeight) * 100}%`,
+                      width: `${(hotspot.hintWidth / hotspot.hitWidth) * 100}%`,
+                      height: `${(hotspot.hintHeight / hotspot.hitHeight) * 100}%`,
+                    }}
+                  />
+                </div>
+              ))}
+              {visibleDragHotspots.map((hotspot) => (
+                (() => {
+                  const hotspotStyle = activeDragOverlayRect && activeDragHotspotKey === hotspot.key
+                    ? {
+                      left: `${activeDragOverlayRect.left}px`,
+                      top: `${activeDragOverlayRect.top}px`,
+                      width: `${activeDragOverlayRect.width}px`,
+                      height: `${activeDragOverlayRect.height}px`,
+                    }
+                    : {
+                      left: `${(hotspot.x / renderFrame.viewWidth) * 100}%`,
+                      top: `${(hotspot.y / renderFrame.viewHeight) * 100}%`,
+                      width: `${(hotspot.width / renderFrame.viewWidth) * 100}%`,
+                      height: `${(hotspot.height / renderFrame.viewHeight) * 100}%`,
+                    };
+
+                  return (
+                <div
+                  key={hotspot.key}
+                  className="figure-drag-hotspot"
+                  data-hotspot-key={hotspot.key}
+                  data-field-name={hotspot.fieldName}
+                  data-axis={hotspot.axis}
+                  data-direction-factor={hotspot.directionFactor}
+                  style={hotspotStyle}
+                />
+                  );
+                })()
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     );

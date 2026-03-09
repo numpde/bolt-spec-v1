@@ -145,6 +145,9 @@ h2 {
 }
 
 .panel-toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 9px 12px;
   border: 1px solid rgba(30, 42, 47, 0.12);
   border-radius: 999px;
@@ -172,6 +175,22 @@ h2 {
 .panel-toolbar-button.is-failed {
   border-color: rgba(157, 91, 54, 0.4);
   color: var(--accent);
+}
+
+.panel-toolbar-icon-button {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+}
+
+.panel-toolbar-icon {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
 }
 
 .catalog-list {
@@ -375,7 +394,6 @@ h2 {
     rgba(255, 255, 255, 0.2);
   border: 1px solid rgba(255, 255, 255, 0.65);
   overflow: hidden;
-  touch-action: pan-y;
 }
 
 .figure-wrap.is-copy-flashing {
@@ -428,6 +446,15 @@ h2 {
 .figure-svg-layer {
   position: relative;
   z-index: 1;
+}
+
+.figure-scroll-viewport {
+  position: relative;
+  overflow: hidden;
+}
+
+.figure-scroll-content {
+  position: relative;
 }
 
 .figure-corner-toggle {
@@ -501,6 +528,48 @@ h2 {
   inset: 0;
   z-index: 3;
   pointer-events: none;
+}
+
+.figure-drag-debug-range {
+  position: absolute;
+  border-radius: 999px;
+  background: rgba(214, 131, 72, 0.82);
+  box-shadow: 0 0 0 1px rgba(214, 131, 72, 0.18);
+}
+
+.figure-drag-debug-bound {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  margin-top: -5px;
+  border-radius: 999px;
+  background: rgba(214, 131, 72, 0.92);
+  box-shadow: 0 0 0 2px rgba(255, 247, 238, 0.72);
+}
+
+.figure-drag-debug-overlay {
+  position: absolute;
+  border: 1.5px dashed rgba(72, 126, 214, 0.95);
+  border-radius: 999px;
+  background: rgba(72, 126, 214, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(72, 126, 214, 0.12);
+}
+
+.figure-drag-debug-card {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(30, 42, 47, 0.86);
+  color: rgba(247, 241, 232, 0.96);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  line-height: 1.25;
+  box-shadow: 0 8px 18px rgba(34, 38, 32, 0.12);
 }
 
 .figure-control-tray {
@@ -822,6 +891,18 @@ h2 {
   .figure-control-step-row,
   .figure-control-size-grid {
     grid-template-columns: 1fr;
+  }
+
+  .figure-wrap.is-mobile-scroll .figure-scroll-viewport {
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .figure-wrap.is-mobile-scroll .figure-scroll-viewport::-webkit-scrollbar {
+    display: none;
   }
 
   .figure-corner-toggle {

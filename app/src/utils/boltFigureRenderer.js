@@ -37,7 +37,9 @@
 
   const EXCLUDED_DRAG_HOTSPOT_KEYS = new Set([
     "underHeadLengthMm:start",
-    "headHeightMm:end",
+    "headHeightMm:start",
+    "headDiameterMm:start",
+    "nominalDiameterMm:start",
     "socketDepthMm:start",
     "threadedLengthMm:end",
   ]);
@@ -153,7 +155,10 @@
 
   const buildBoltFigureScene = (inputSpec, options = {}) => {
     const spec = normalizeBoltSpec(inputSpec);
-    const showTopView = options.showTopView !== false;
+    const layoutMode = options.layoutMode === "mobile-scroll" ? "mobile-scroll" : "default";
+    const showTopView = layoutMode === "mobile-scroll"
+      ? true
+      : options.showTopView !== false;
     const detailLevel = options.detailLevel === "fast" ? "fast" : "full";
     const scale = 18;
     const leftGutter = 82;
@@ -178,6 +183,8 @@
       : rightGutter;
     const partRightX = partLeftX + sideWidthPx;
     const viewWidth = partRightX + rightGutter;
+    const sideViewportWidth = sideWidthPx + rightGutter * 2;
+    const sideFramedScrollLeft = Math.max(0, viewWidth - sideViewportWidth);
     const bottomDimensionLineY = sideBottomY + 24;
     const lowerTextY = bottomDimensionLineY + 12;
     const topViewBottomY = topCenterY + topCircleRadiusPx + 26;
@@ -278,7 +285,10 @@
       detailLevel,
       viewWidth,
       viewHeight,
+      layoutMode,
       showTopView,
+      sideViewportWidth,
+      sideFramedScrollLeft,
       centerX,
       topCenterY,
       topCircleRadiusPx,
@@ -378,7 +388,18 @@
       .join("")
   );
 
-  const buildDimensionWheelRect = (dimension) => {
+  const clampRectToScene = (rect, scene) => {
+    const maxX = Math.max(0, scene.viewWidth - rect.width);
+    const maxY = Math.max(0, scene.viewHeight - rect.height);
+
+    return {
+      ...rect,
+      x: Math.min(Math.max(rect.x, 0), maxX),
+      y: Math.min(Math.max(rect.y, 0), maxY),
+    };
+  };
+
+  const buildDimensionWheelRect = (dimension, scene) => {
     if (!dimension.fieldName) {
       return null;
     }
@@ -399,28 +420,36 @@
     const hintHeight = 34;
     const hitWidth = isVertical ? 144 : 132;
     const hitHeight = 68;
-    const hintX = textCenterX - hintWidth / 2;
-    const hintY = textCenterY - hintHeight / 2;
-    const hitX = textCenterX - hitWidth / 2;
-    const hitY = textCenterY - hitHeight / 2;
+    const hintRect = clampRectToScene({
+      x: textCenterX - hintWidth / 2,
+      y: textCenterY - hintHeight / 2,
+      width: hintWidth,
+      height: hintHeight,
+    }, scene);
+    const hitRect = clampRectToScene({
+      x: textCenterX - hitWidth / 2,
+      y: textCenterY - hitHeight / 2,
+      width: hitWidth,
+      height: hitHeight,
+    }, scene);
 
     return {
       key: `${dimension.fieldName}:wheel`,
       fieldName: dimension.fieldName,
-      hintX,
-      hintY,
-      hintWidth,
-      hintHeight,
-      hitX,
-      hitY,
-      hitWidth,
-      hitHeight,
+      hintX: hintRect.x,
+      hintY: hintRect.y,
+      hintWidth: hintRect.width,
+      hintHeight: hintRect.height,
+      hitX: hitRect.x,
+      hitY: hitRect.y,
+      hitWidth: hitRect.width,
+      hitHeight: hitRect.height,
       radius: hintHeight / 2,
     };
   };
 
-  const renderDimensionWheelZone = (dimension) => {
-    const rect = buildDimensionWheelRect(dimension);
+  const renderDimensionWheelZone = (dimension, scene) => {
+    const rect = buildDimensionWheelRect(dimension, scene);
 
     if (!rect) {
       return "";
@@ -429,7 +458,7 @@
     return `<rect class="figure-wheel-zone" data-field-name="${rect.fieldName}" x="${rect.hintX}" y="${rect.hintY}" width="${rect.hintWidth}" height="${rect.hintHeight}" rx="${rect.radius}" ry="${rect.radius}" />`;
   };
 
-  const buildDimensionDragRects = (dimension) => {
+  const buildDimensionDragRects = (dimension, scene) => {
     if (!dimension.fieldName) {
       return [];
     }
@@ -439,7 +468,7 @@
       const height = 34;
 
       return [
-        {
+        clampRectToScene({
           key: `${dimension.fieldName}:start`,
           fieldName: dimension.fieldName,
           axis: "vertical",
@@ -448,8 +477,8 @@
           y: dimension.y1 - height / 2,
           width,
           height,
-        },
-        {
+        }, scene),
+        clampRectToScene({
           key: `${dimension.fieldName}:end`,
           fieldName: dimension.fieldName,
           axis: "vertical",
@@ -458,7 +487,7 @@
           y: dimension.y2 - height / 2,
           width,
           height,
-        },
+        }, scene),
       ];
     }
 
@@ -466,7 +495,7 @@
     const height = 44;
 
     return [
-      {
+      clampRectToScene({
         key: `${dimension.fieldName}:start`,
         fieldName: dimension.fieldName,
         axis: "horizontal",
@@ -475,8 +504,8 @@
         y: dimension.y1 - height / 2,
         width,
         height,
-      },
-      {
+      }, scene),
+      clampRectToScene({
         key: `${dimension.fieldName}:end`,
         fieldName: dimension.fieldName,
         axis: "horizontal",
@@ -485,19 +514,19 @@
         y: dimension.y2 - height / 2,
         width,
         height,
-      },
+      }, scene),
     ];
   };
 
   const buildDragHotspots = (scene) => (
     scene.dimensions
-      .flatMap((dimension) => buildDimensionDragRects(dimension))
+      .flatMap((dimension) => buildDimensionDragRects(dimension, scene))
       .filter((rect) => !EXCLUDED_DRAG_HOTSPOT_KEYS.has(rect.key))
   );
 
   const buildWheelHotspots = (scene) => (
     scene.dimensions
-      .map((dimension) => buildDimensionWheelRect(dimension))
+      .map((dimension) => buildDimensionWheelRect(dimension, scene))
       .filter(Boolean)
   );
 
@@ -532,7 +561,7 @@
       dimensions.map((dimension) => [
         `<line class="figure-dim" x1="${dimension.x1}" y1="${dimension.y1}" x2="${dimension.x2}" y2="${dimension.y2}" />`,
         renderDimensionCaps(dimension),
-        includeWheelZones ? renderDimensionWheelZone(dimension) : "",
+        includeWheelZones ? renderDimensionWheelZone(dimension, scene) : "",
         `<text class="figure-text" text-anchor="${dimension.textAnchor}" x="${dimension.textX}" y="${dimension.textY}">${escapeXml(dimension.label)}</text>`,
       ].join("")).join(""),
       showTopView

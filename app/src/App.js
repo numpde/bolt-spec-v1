@@ -94,7 +94,7 @@
     const [copyFlashNonce, setCopyFlashNonce] = React.useState(0);
     const pendingHistorySyncRef = React.useRef(null);
     const copyFeedbackTimerRef = React.useRef(null);
-    const lastPointerCopyAtRef = React.useRef(-Infinity);
+    const pointerInitiatedCopyRef = React.useRef(false);
     const deferredDraftSpec = React.useDeferredValue(draftSpec);
     const spec = React.useMemo(() => normalizeBoltSpec(draftSpec), [draftSpec]);
     const activePresetKey = React.useMemo(
@@ -386,12 +386,13 @@
         return;
       }
 
-      lastPointerCopyAtRef.current = Date.now();
+      pointerInitiatedCopyRef.current = true;
       void handleCopyCurrentLink();
     }, [handleCopyCurrentLink]);
 
-    const handleCopyClick = React.useCallback(() => {
-      if (Date.now() - lastPointerCopyAtRef.current < 700) {
+    const handleCopyClick = React.useCallback((event) => {
+      if (pointerInitiatedCopyRef.current || event.detail > 0) {
+        pointerInitiatedCopyRef.current = false;
         return;
       }
 
@@ -414,6 +415,20 @@
       handleFieldStepAdjust(activeFieldName, stepDelta);
     }, [activeFieldName, handleFieldStepAdjust]);
 
+    const downloadIcon = (
+      <svg className="panel-toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M10 3.5V12.5" />
+        <path d="M6.75 9.75L10 13L13.25 9.75" />
+        <path d="M4 15.5H16" />
+      </svg>
+    );
+    const copyIcon = (
+      <svg className="panel-toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+        <rect x="7" y="5" width="8.5" height="10" rx="1.8" />
+        <rect x="4.5" y="2.5" width="8.5" height="10" rx="1.8" />
+      </svg>
+    );
+
     return (
       <div className="app-shell">
         <main className="preview-column">
@@ -423,18 +438,22 @@
               <div className="panel-toolbar-actions">
                 <button
                   type="button"
-                  className="panel-toolbar-button"
+                  className="panel-toolbar-button panel-toolbar-icon-button"
                   onClick={handleDownloadCurrentFigure}
+                  aria-label="Download sketch"
+                  title="Download sketch"
                 >
-                  Download sketch
+                  {downloadIcon}
                 </button>
                 <button
                   type="button"
-                  className={`panel-toolbar-button ${copyState === "failed" ? "is-failed" : ""}`}
+                  className={`panel-toolbar-button panel-toolbar-icon-button ${copyState === "failed" ? "is-failed" : ""}`}
                   onPointerDown={handleCopyPointerDown}
                   onClick={handleCopyClick}
+                  aria-label="Copy link"
+                  title="Copy link"
                 >
-                  Copy link
+                  {copyIcon}
                 </button>
               </div>
             </div>
@@ -444,7 +463,7 @@
               onStepAdjustField={handleFieldStepAdjust}
               onSelectField={setActiveFieldName}
               onDismissField={handleCloseActiveField}
-              onToggleTopView={() => setShowTopView((current) => !current)}
+              onSetTopView={setShowTopView}
               activeFieldName={activeFieldName}
               copyFlashNonce={copyFlashNonce}
               showTopView={showTopView}
