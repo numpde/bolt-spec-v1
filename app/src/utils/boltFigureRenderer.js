@@ -5,7 +5,10 @@
   const modelApi = typeof module === "object" && module.exports
     ? require("./boltModel.js")
     : root;
-  const api = factory(svgApi, modelApi);
+  const themeApi = typeof module === "object" && module.exports
+    ? require("./boltTheme.js")
+    : root;
+  const api = factory(svgApi, modelApi, themeApi);
 
   if (typeof module === "object" && module.exports) {
     module.exports = api;
@@ -14,7 +17,7 @@
   if (root) {
     Object.assign(root, api);
   }
-})(typeof globalThis !== "undefined" ? globalThis : this, function(svgApi, modelApi) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function(svgApi, modelApi, themeApi) {
   const {
     pointsToPath,
     buildTorxPoints,
@@ -24,19 +27,15 @@
     normalizeRotationDeg,
   } = svgApi;
   const { normalizeBoltSpec } = modelApi;
+  const {
+    BOLT_LIGHT_THEME,
+    buildBoltFigureSvgStyle,
+    getBoltFigureBackgroundFill,
+    getBoltThemeByKey,
+  } = themeApi;
 
-  const FIGURE_SVG_STYLE = `
-    .figure-svg { display: block; width: 100%; height: auto; }
-    .figure-line { stroke: #1e2a2f; stroke-width: 1.3; fill: rgba(255, 255, 255, 0.12); }
-    .figure-thread { stroke: #415057; stroke-width: 0.8; }
-    .figure-hidden { stroke: #6b777c; stroke-width: 0.95; stroke-dasharray: 4 4; fill: none; }
-    .figure-centerline { stroke: rgba(68, 89, 96, 0.28); stroke-width: 0.8; stroke-dasharray: 10 6 2 6; }
-    .figure-dim { stroke: #7f4e31; stroke-width: 0.85; fill: none; }
-    .figure-text { fill: #7f4e31; font-family: "DejaVu Sans Mono", monospace; font-size: 11px; pointer-events: none; user-select: none; }
-    .figure-caption { fill: #445960; font-family: "DejaVu Sans Mono", monospace; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; }
-    .figure-wheel-zone { fill: rgba(182, 64, 64, 0.085); stroke: rgba(182, 64, 64, 0.16); stroke-width: 0.7; cursor: ns-resize; pointer-events: all; }
-    .figure-wheel-zone:hover { fill: rgba(182, 64, 64, 0.12); stroke: rgba(182, 64, 64, 0.22); }
-  `;
+  const FIGURE_SVG_STYLE = buildBoltFigureSvgStyle(BOLT_LIGHT_THEME);
+  const FIGURE_BACKGROUND_FILL = getBoltFigureBackgroundFill(BOLT_LIGHT_THEME);
 
   const getBoltFigureAriaLabel = (showTopView) => (
     showTopView ? "Live bolt side and top views" : "Live bolt side view"
@@ -631,6 +630,9 @@
 
   const renderBoltFigureSvg = (inputSpec, options = {}) => {
     const scene = buildBoltFigureScene(inputSpec, options);
+    const theme = options.theme || getBoltThemeByKey(options.themeKey);
+    const figureSvgStyle = buildBoltFigureSvgStyle(theme);
+    const figureBackgroundFill = getBoltFigureBackgroundFill(theme);
     const includeWheelZones = options.includeWheelZones !== false;
     const wheelHotspots = buildWheelHotspots(scene);
     const {
@@ -652,8 +654,8 @@
 
     return [
       `<svg class="figure-svg" xmlns="http://www.w3.org/2000/svg" viewBox="${viewMinX} 0 ${viewWidth} ${viewHeight}" role="img" aria-label="${getBoltFigureAriaLabel(showTopView)}">`,
-      `<style>${FIGURE_SVG_STYLE}</style>`,
-      `<rect x="${viewMinX}" y="0" width="${viewWidth}" height="${viewHeight}" fill="#f7f1e8" />`,
+      `<style>${figureSvgStyle}</style>`,
+      `<rect x="${viewMinX}" y="0" width="${viewWidth}" height="${viewHeight}" fill="${figureBackgroundFill}" />`,
       renderLine("figure-centerline", centerline),
       `<path class="figure-line" d="${sideOutlinePath}" />`,
       threadLines.top.map((line) => renderLine("figure-thread", line)).join(""),
@@ -685,6 +687,7 @@
   };
 
   return {
+    FIGURE_BACKGROUND_FILL,
     FIGURE_SVG_STYLE,
     buildBoltFigureScene,
     buildDragHotspots,

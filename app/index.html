@@ -16,6 +16,19 @@
   </script>
   <script>
     window.__writeBoltLocalAsset__(
+      '<script src="src/utils/boltTheme.js?v=__BOLT_APP_ASSET_REV__"><\/script>'
+    );
+  </script>
+  <script>
+    // Inject the selected theme before the stylesheet loads so the page and the
+    // SVG figure start from the same palette without a repaint.
+    window.__BOLT_INITIAL_THEME_KEY__ = window.resolveInitialBoltThemeKey();
+    document.write(
+      `<style>${window.serializeBoltThemeCssVars(window.getBoltThemeByKey(window.__BOLT_INITIAL_THEME_KEY__))}</style>`
+    );
+  </script>
+  <script>
+    window.__writeBoltLocalAsset__(
       '<link rel="stylesheet" href="src/styles.css?v=__BOLT_APP_ASSET_REV__" />'
     );
   </script>

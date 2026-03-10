@@ -14,6 +14,7 @@ const parseArgs = (argv) => {
   const options = {
     preset: "m5",
     rotation: 0,
+    theme: "light",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -29,6 +30,11 @@ const parseArgs = (argv) => {
       options.rotation = Number(argv[index + 1]) || 0;
       index += 1;
       continue;
+    }
+
+    if (token === "--theme" && argv[index + 1]) {
+      options.theme = argv[index + 1];
+      index += 1;
     }
   }
 
@@ -52,6 +58,7 @@ const main = () => {
   const spec = cloneBoltPreset(options.preset);
   const svg = renderBoltFigureSvg(spec, {
     axialRotationDeg: options.rotation,
+    themeKey: options.theme,
   });
 
   fs.mkdirSync(previewDir, { recursive: true });

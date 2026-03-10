@@ -1,11 +1,13 @@
 (function() {
   const {
-    FIGURE_SVG_STYLE,
     buildBoltFigureScene,
     buildDragHotspots,
     buildWheelHotspots,
+    buildBoltFigureSvgStyle,
     getBoltFieldBounds,
     getBoltFigureAriaLabel,
+    getBoltFigureBackgroundFill,
+    getBoltThemeByKey,
     normalizeBoltSpec,
   } = window;
   const FIELD_CONFIG_MAP = Object.fromEntries(
@@ -219,6 +221,7 @@
 
   const BoltFigureSvg = React.memo(({
     scene,
+    theme,
     frameWidth = null,
     frameHeight = null,
     frameMinX = null,
@@ -244,6 +247,14 @@
     const svgViewMinX = frameMinX ?? viewMinX;
     const svgViewWidth = frameWidth || viewWidth;
     const svgViewHeight = frameHeight || viewHeight;
+    const figureSvgStyle = React.useMemo(
+      () => buildBoltFigureSvgStyle(theme),
+      [theme]
+    );
+    const figureBackgroundFill = React.useMemo(
+      () => getBoltFigureBackgroundFill(theme),
+      [theme]
+    );
     const mobileTextOverride = textScale !== 1
       ? `
         .figure-text { font-size: ${(11 * textScale).toFixed(2)}px; }
@@ -259,10 +270,10 @@
         role="img"
         aria-label={getBoltFigureAriaLabel(showTopView)}
       >
-        <style>{FIGURE_SVG_STYLE}</style>
+        <style>{figureSvgStyle}</style>
         {mobileTextOverride ? <style>{mobileTextOverride}</style> : null}
         {showBackground ? (
-          <rect x={svgViewMinX} y="0" width={svgViewWidth} height={svgViewHeight} fill="#f7f1e8" />
+          <rect x={svgViewMinX} y="0" width={svgViewWidth} height={svgViewHeight} fill={figureBackgroundFill} />
         ) : null}
         <line className="figure-centerline" x1={centerline.x1} y1={centerline.y1} x2={centerline.x2} y2={centerline.y2} />
         <path className="figure-line" d={sideOutlinePath} />
@@ -349,6 +360,7 @@
 
   const BoltFigure = ({
     spec,
+    themeKey = "light",
     axialRotationDeg = 0,
     onAdjustField,
     onStepAdjustField,
@@ -362,6 +374,7 @@
     showTopView = true,
     externalFreezeFieldName = null,
   }) => {
+    const theme = React.useMemo(() => getBoltThemeByKey(themeKey), [themeKey]);
     const containerRef = React.useRef(null);
     const scrollViewportRef = React.useRef(null);
     const contentRef = React.useRef(null);
@@ -2396,6 +2409,7 @@
             <div className="figure-svg-layer">
               <BoltFigureSvg
                 scene={scene}
+                theme={theme}
                 frameMinX={renderFrame.viewMinX}
                 frameWidth={renderFrame.viewWidth}
                 frameHeight={renderFrame.viewHeight}
@@ -2416,6 +2430,7 @@
                 >
                   <BoltFigureSvg
                     scene={checkpointGhostScene}
+                    theme={theme}
                     frameMinX={checkpointGhostFrame.viewMinX}
                     frameWidth={checkpointGhostFrame.viewWidth}
                     frameHeight={checkpointGhostFrame.viewHeight}

@@ -1,7 +1,10 @@
 (function() {
   const {
+    applyBoltThemeCssVars,
     applySizeFamilyToDraftSpec,
+    BOLT_THEME_STORAGE_KEY,
     getBoltPresets,
+    getBoltThemeByKey,
     getDefaultPresetKey,
     cloneBoltPreset,
     getPresetEditableOverrides,
@@ -19,6 +22,7 @@
     buildBoltDiagnostics,
     getThreadSeriesContext,
     copyTextToClipboard,
+    resolveInitialBoltThemeKey,
   } = window;
   const {
     FieldControlTray,
@@ -34,6 +38,16 @@
   const EXTERNAL_FIGURE_FREEZE_MS = 320;
   const PARAMS_BELOW_CATALOG_STORAGE_KEY = "bolt-params-below-catalog-v1";
   const TOP_VIEW_PREFERENCE_STORAGE_KEY = "bolt-top-view-preference-v1";
+  const readInitialThemeKey = () => {
+    if (typeof window === "undefined") {
+      return "light";
+    }
+
+    return window.__BOLT_INITIAL_THEME_KEY__ || resolveInitialBoltThemeKey();
+  };
+  const buildNormalizedCheckpointUrl = (checkpointLike, locationLike) => (
+    buildCheckpointUrl(normalizeCheckpointState(checkpointLike), locationLike)
+  );
   const editableSpecDidChange = (currentSpec, nextSpec) => (
     EDITABLE_FIELD_NAMES.some((fieldName) => currentSpec[fieldName] !== nextSpec[fieldName])
   );
@@ -136,6 +150,7 @@
     const initialAppState = React.useMemo(() => getInitialAppState(), []);
     const [standardProfileKey, setStandardProfileKey] = React.useState(initialAppState.standardProfileKey);
     const [draftSpec, setDraftSpec] = React.useState(initialAppState.draftSpec);
+    const [themeKey, setThemeKey] = React.useState(() => readInitialThemeKey());
     const [showTopView, setShowTopView] = React.useState(() => readTopViewPreference());
     const [axialRotationDeg, setAxialRotationDeg] = React.useState(0);
     const [activeFieldName, setActiveFieldName] = React.useState(null);
@@ -151,12 +166,13 @@
     const checkpointGhostIdRef = React.useRef(0);
     const lastDurableCheckpointUrlRef = React.useRef(
       typeof window !== "undefined"
-        ? buildCheckpointUrl(initialAppState, window.location)
+        ? buildNormalizedCheckpointUrl(initialAppState, window.location)
         : null
     );
     const pointerInitiatedCopyRef = React.useRef(false);
     const deferredDraftSpec = React.useDeferredValue(draftSpec);
     const spec = React.useMemo(() => normalizeBoltSpec(draftSpec), [draftSpec]);
+    const theme = React.useMemo(() => getBoltThemeByKey(themeKey), [themeKey]);
     const deferredSpec = React.useMemo(() => normalizeBoltSpec(deferredDraftSpec), [deferredDraftSpec]);
     const activePresetKey = React.useMemo(
       () => getMatchingPresetKey(draftSpec, standardProfileKey),
@@ -193,6 +209,19 @@
       })
     ), [draftSpec, standardProfileKey]);
 
+    const buildCanonicalCheckpointUrl = React.useCallback((checkpointLike) => {
+      return buildNormalizedCheckpointUrl(checkpointLike, window.location);
+    }, []);
+
+    const wouldDuplicateLastDurableCheckpoint = React.useCallback((checkpointLike) => {
+      const checkpointUrl = buildCanonicalCheckpointUrl(checkpointLike);
+
+      return (
+        lastDurableCheckpointUrlRef.current != null &&
+        lastDurableCheckpointUrlRef.current === checkpointUrl
+      );
+    }, [buildCanonicalCheckpointUrl]);
+
     const applyAppState = React.useCallback((nextAppState) => {
       setStandardProfileKey(nextAppState.standardProfileKey);
       setDraftSpec(nextAppState.draftSpec);
@@ -200,7 +229,7 @@
 
     const commitCheckpointToHistory = React.useCallback((mode, checkpointLike) => {
       const checkpointState = normalizeCheckpointState(checkpointLike);
-      const nextUrl = buildCheckpointUrl(checkpointState, window.location);
+      const nextUrl = buildNormalizedCheckpointUrl(checkpointState, window.location);
       const historyState = buildCheckpointHistoryState(checkpointState);
 
       if (mode === "push") {
@@ -249,10 +278,9 @@
       const ghostCheckpointState = normalizeCheckpointState(
         ghostCheckpointLike || checkpointState
       );
-      const checkpointUrl = buildCheckpointUrl(checkpointState, window.location);
-      const isDuplicateOfCurrentCheckpoint = (
-        lastDurableCheckpointUrlRef.current != null &&
-        lastDurableCheckpointUrlRef.current === checkpointUrl
+      const checkpointUrl = buildCanonicalCheckpointUrl(checkpointState);
+      const isDuplicateOfCurrentCheckpoint = wouldDuplicateLastDurableCheckpoint(
+        checkpointState
       );
 
       if (isDuplicateOfCurrentCheckpoint) {
@@ -284,9 +312,11 @@
     }, [
       axialRotationDeg,
       applyAppState,
+      buildCanonicalCheckpointUrl,
       commitCheckpointToHistory,
       flushPendingHistorySync,
       showTopView,
+      wouldDuplicateLastDurableCheckpoint,
     ]);
 
     const scheduleHistorySync = React.useCallback((checkpointLike) => {
@@ -316,7 +346,7 @@
           getDefaultAppState()
         );
 
-        lastDurableCheckpointUrlRef.current = buildCheckpointUrl(nextCheckpoint, window.location);
+        lastDurableCheckpointUrlRef.current = buildNormalizedCheckpointUrl(nextCheckpoint, window.location);
         applyAppState(nextCheckpoint);
       };
 
@@ -358,6 +388,16 @@
         window.clearTimeout(timerId);
       };
     }, [checkpointGhost]);
+
+    React.useEffect(() => {
+      applyBoltThemeCssVars(document.documentElement, theme);
+
+      try {
+        window.localStorage.setItem(BOLT_THEME_STORAGE_KEY, themeKey);
+      } catch (error) {
+        // Ignore persistence failures; the current session theme still works.
+      }
+    }, [theme, themeKey]);
 
     React.useEffect(() => {
       try {
@@ -592,6 +632,9 @@
       () => buildCurrentAppState(),
       [buildCurrentAppState]
     );
+    const isCurrentCheckpointAlreadyDurable = wouldDuplicateLastDurableCheckpoint(
+      currentCheckpoint
+    );
 
     const handleApplySizeFamily = React.useCallback((sizePresetKey) => {
       const nextPreset = cloneBoltPreset(sizePresetKey);
@@ -610,8 +653,9 @@
       await downloadCheckpointFigure(currentCheckpoint, {
         showTopView,
         axialRotationDeg,
+        themeKey,
       });
-    }, [axialRotationDeg, currentCheckpoint, showTopView]);
+    }, [axialRotationDeg, currentCheckpoint, showTopView, themeKey]);
 
     const triggerCopyFlash = React.useCallback(() => {
       setCopyFlashNonce((current) => current + 1);
@@ -695,6 +739,29 @@
         <rect x="4.5" y="2.5" width="8.5" height="10" rx="1.8" />
       </svg>
     );
+    const themeIcon = themeKey === "dark" ? (
+      <svg className="panel-toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+        <circle cx="10" cy="10" r="3.1" />
+        <path d="M10 3V5" />
+        <path d="M10 15V17" />
+        <path d="M3 10H5" />
+        <path d="M15 10H17" />
+        <path d="M5.2 5.2L6.6 6.6" />
+        <path d="M13.4 13.4L14.8 14.8" />
+        <path d="M13.4 6.6L14.8 5.2" />
+        <path d="M5.2 14.8L6.6 13.4" />
+      </svg>
+    ) : (
+      <svg className="panel-toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M13.6 2.9A6.8 6.8 0 1 0 17.1 14a7 7 0 0 1-3.5-11.1Z" />
+      </svg>
+    );
+    const handleToggleTheme = React.useCallback(() => {
+      setThemeKey((current) => (current === "dark" ? "light" : "dark"));
+    }, []);
+    const themeToggleLabel = themeKey === "dark"
+      ? "Use light theme"
+      : "Use dark theme";
     const handleToggleParamsPlacement = React.useCallback(() => {
       setIsParamsBelowCatalog((current) => !current);
     }, []);
@@ -722,9 +789,19 @@
             <button
               type="button"
               className="panel-toolbar-button panel-toolbar-icon-button"
+              onClick={handleToggleTheme}
+              aria-label={themeToggleLabel}
+              title={themeToggleLabel}
+            >
+              {themeIcon}
+            </button>
+            <button
+              type="button"
+              className="panel-toolbar-button panel-toolbar-icon-button"
               onClick={checkpointCurrentGeometry}
-              aria-label="Checkpoint"
-              title="Checkpoint"
+              aria-label={isCurrentCheckpointAlreadyDurable ? "Already checkpointed" : "Checkpoint"}
+              title={isCurrentCheckpointAlreadyDurable ? "Already checkpointed" : "Checkpoint"}
+              disabled={isCurrentCheckpointAlreadyDurable}
             >
               {checkpointFlashNonce > 0 ? (
                 <span
@@ -758,6 +835,7 @@
         </div>
         <BoltFigure
           spec={spec}
+          themeKey={themeKey}
           axialRotationDeg={axialRotationDeg}
           onAdjustField={handleFieldWheelAdjust}
           onStepAdjustField={handleFieldStepAdjust}

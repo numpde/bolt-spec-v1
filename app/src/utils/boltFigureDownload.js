@@ -71,6 +71,7 @@
     const checkpoint = normalizeCheckpointState(checkpointLike);
     const showTopView = options.showTopView !== false;
     const axialRotationDeg = Number(options.axialRotationDeg) || 0;
+    const themeKey = options.themeKey || "light";
     const scene = buildBoltFigureScene(checkpoint.draftSpec, {
       showTopView,
       detailLevel: "full",
@@ -81,6 +82,7 @@
       detailLevel: "full",
       includeWheelZones: false,
       axialRotationDeg,
+      themeKey,
     });
     const svgUrl = URL.createObjectURL(new Blob(
       [svgMarkup],
