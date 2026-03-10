@@ -1,5 +1,8 @@
 (function(root, factory) {
-  const api = factory();
+  const schemaApi = typeof module === "object" && module.exports
+    ? require("./boltSchema.js")
+    : root;
+  const api = factory(schemaApi);
 
   if (typeof module === "object" && module.exports) {
     module.exports = api;
@@ -8,7 +11,13 @@
   if (root) {
     Object.assign(root, api);
   }
-})(typeof globalThis !== "undefined" ? globalThis : this, function() {
+})(typeof globalThis !== "undefined" ? globalThis : this, function(schemaApi) {
+  const {
+    BOLT_FIELDS,
+    BOLT_DIMENSION_FIELDS,
+    DEFAULT_EDITABLE_BOLT_SPEC,
+    SIZE_FAMILY_FIELD_NAMES,
+  } = schemaApi;
   const PRESET_CATALOG_BROWSER_URL = "static/bolt-presets.yaml";
   const PRESET_CATALOG_NODE_PATH = "../../static/bolt-presets.yaml";
   const PRESET_CATALOG_STATE = {
@@ -17,102 +26,6 @@
   const BOLT_PRESETS = {};
   const SIZE_FAMILY_PRESET_KEYS = [];
   let cachedCatalogPromise = null;
-  const DEFAULT_EDITABLE_BOLT_SPEC = {
-    nominalDiameterMm: 5.0,
-    pitchMm: 0.8,
-    underHeadLengthMm: 18.0,
-    threadedLengthMm: 13.0,
-    headDiameterMm: 7.0,
-    headHeightMm: 3.5,
-    tipChamferMm: 0.5,
-    socketDepthMm: 3.0,
-  };
-
-  const BOLT_FIELDS = [
-    {
-      name: "nominalDiameterMm",
-      label: "Nominal diameter",
-      unit: "mm",
-      hint: "Thread major diameter",
-      min: 4,
-      max: 8,
-      step: 0.1,
-    },
-    {
-      name: "pitchMm",
-      label: "Pitch",
-      unit: "mm",
-      hint: "Thread spacing",
-      min: 0.4,
-      max: 2.0,
-      step: 0.05,
-    },
-    {
-      name: "underHeadLengthMm",
-      label: "Under-head length",
-      unit: "mm",
-      hint: "Shank length from head seat to tip",
-      min: 6,
-      max: 60,
-      step: 0.5,
-    },
-    {
-      name: "threadedLengthMm",
-      label: "Threaded length",
-      unit: "mm",
-      hint: "Threaded portion of the shank",
-      min: 0.5,
-      max: 60,
-      step: 0.5,
-    },
-    {
-      name: "headDiameterMm",
-      label: "Head diameter",
-      unit: "mm",
-      hint: "Top-view outer diameter",
-      min: 5,
-      max: 14,
-      step: 0.1,
-    },
-    {
-      name: "headHeightMm",
-      label: "Head height",
-      unit: "mm",
-      hint: "Axial head thickness",
-      min: 2,
-      max: 8,
-      step: 0.1,
-    },
-    {
-      name: "tipChamferMm",
-      label: "Tip chamfer",
-      unit: "mm",
-      hint: "Side-view tip taper length",
-      min: 0,
-      max: 2,
-      step: 0.05,
-    },
-    {
-      name: "socketDepthMm",
-      label: "Socket depth",
-      unit: "mm",
-      hint: "Side-view hidden depth",
-      min: 1,
-      max: 5,
-      step: 0.1,
-    },
-  ];
-  const BOLT_DIMENSION_FIELDS = BOLT_FIELDS.filter((field) => field.name !== "tipChamferMm");
-
-  const SIZE_FAMILY_FIELD_NAMES = [
-    "nominalDiameterMm",
-    "pitchMm",
-    "headDiameterMm",
-    "headHeightMm",
-    "tipChamferMm",
-    "socketDepthMm",
-  ];
-
   const cloneDeep = (value) => (
     value == null ? value : JSON.parse(JSON.stringify(value))
   );
@@ -261,7 +174,7 @@
           displayName: String(presetValue.displayName || presetValue.presetName || presetKey),
           presetName: String(presetValue.presetName || presetKey.toUpperCase()),
           standardProfileKey: String(presetValue.standardProfileKey || "iso-metric-262"),
-          driveLabel: String(presetValue.driveLabel || "T25"),
+          socket: String(presetValue.socket || presetValue.driveLabel || "T25"),
         }];
       })
     );
@@ -364,12 +277,20 @@
   const formatBoltCatalogMeta = (specLike, fallbackPresetName = "") => {
     const sizeTag = formatBoltSizeTag(specLike, fallbackPresetName);
     const length = Number(specLike?.underHeadLengthMm);
+    const material = typeof specLike?.material === "string" ? specLike.material.trim() : "";
+    const parts = [sizeTag];
 
-    if (!Number.isFinite(length)) {
-      return sizeTag;
+    if (material) {
+      parts.push(material);
     }
 
-    return `${sizeTag} · ${length.toFixed(1)} mm`;
+    if (!Number.isFinite(length)) {
+      return parts.join(" · ");
+    }
+
+    parts.push(`${length.toFixed(1)} mm`);
+
+    return parts.join(" · ");
   };
 
   const applySizeFamilyToDraftSpec = (draftSpec, presetKey) => {

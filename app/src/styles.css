@@ -87,6 +87,14 @@ button {
   height: 100%;
 }
 
+.app-card-row--pair .app-card-slot > .panel-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: min(440px, calc(100vh - 160px));
+  overflow: hidden;
+}
+
 .hero-card,
 .panel-card,
 .preview-card {
@@ -156,12 +164,14 @@ h2 {
   margin-bottom: 0;
 }
 
-.panel-toolbar-button {
+.panel-toolbar-button,
+.panel-action-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   position: relative;
   z-index: 0;
+  overflow: hidden;
   padding: 9px 12px;
   border: 1px solid rgba(30, 42, 47, 0.12);
   border-radius: 999px;
@@ -178,7 +188,8 @@ h2 {
     box-shadow 1000ms ease;
 }
 
-.panel-toolbar-button:hover {
+.panel-toolbar-button:hover,
+.panel-action-button:hover {
   transition-duration: 0ms;
   z-index: 2;
   transform: translateY(-1px);
@@ -186,16 +197,34 @@ h2 {
   box-shadow: 0 6px 14px rgba(34, 38, 32, 0.05);
 }
 
-.panel-toolbar-button:active {
+.panel-toolbar-button:active,
+.panel-action-button:active {
   transition-duration: 0ms;
   z-index: 2;
   transform: translateY(1px);
   box-shadow: 0 2px 6px rgba(34, 38, 32, 0.04);
 }
 
-.panel-toolbar-button.is-failed {
+.panel-toolbar-button.is-failed,
+.panel-action-button.is-failed {
   border-color: rgba(157, 91, 54, 0.4);
   color: var(--accent);
+}
+
+.panel-toolbar-button:disabled,
+.panel-action-button:disabled {
+  opacity: 0.42;
+  cursor: default;
+  box-shadow: none;
+  transform: none;
+}
+
+.panel-action-button {
+  width: 100%;
+  min-height: 44px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-weight: 500;
 }
 
 .panel-toolbar-icon-button {
@@ -212,6 +241,48 @@ h2 {
   stroke-linecap: round;
   stroke-linejoin: round;
   fill: none;
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes panel-toolbar-checkpoint-flash {
+  0% {
+    opacity: 0.82;
+    transform: scale(1);
+  }
+
+  10% {
+    opacity: 0.56;
+  }
+
+  42% {
+    opacity: 0.24;
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+}
+
+.panel-toolbar-button-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 0;
+}
+
+.panel-toolbar-button-flash--checkpoint {
+  background:
+    radial-gradient(
+      ellipse at center,
+      rgba(194, 82, 82, 0.28) 0%,
+      rgba(194, 82, 82, 0.18) 38%,
+      rgba(194, 82, 82, 0.08) 68%,
+      rgba(194, 82, 82, 0) 100%
+    );
+  animation: panel-toolbar-checkpoint-flash 760ms cubic-bezier(0.12, 0.72, 0.2, 1) forwards;
 }
 
 .catalog-list {
@@ -225,9 +296,15 @@ h2 {
   overflow-y: auto;
 }
 
+.app-card-row--pair .catalog-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
 .catalog-list-row {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 10px;
   min-width: 0;
 }
@@ -275,9 +352,18 @@ h2 {
     0 10px 22px rgba(34, 38, 32, 0.05);
 }
 
+.catalog-list-item.is-deleted {
+  background: rgba(255, 255, 255, 0.38);
+}
+
 .catalog-list-item-action {
   flex: 0 0 auto;
   width: 42px;
+  align-self: center;
+}
+
+.catalog-list-item-action.is-restore {
+  color: rgba(68, 108, 92, 0.92);
 }
 
 .catalog-list-item-action svg {
@@ -342,33 +428,6 @@ h2 {
 .liked-bolt-name-input:focus {
   outline: 2px solid rgba(157, 91, 54, 0.18);
   border-color: rgba(157, 91, 54, 0.45);
-}
-
-.liked-bolt-button {
-  width: 100%;
-  padding: 12px 14px;
-  border: 1px solid rgba(30, 42, 47, 0.18);
-  border-radius: 14px;
-  background:
-    linear-gradient(135deg, rgba(30, 42, 47, 0.94), rgba(63, 83, 89, 0.9));
-  color: #f7f1e8;
-  cursor: pointer;
-  transition:
-    transform 160ms ease,
-    box-shadow 160ms ease,
-    filter 160ms ease;
-}
-
-.liked-bolt-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(30, 42, 47, 0.14);
-  filter: saturate(1.04);
-}
-
-.liked-bolt-button:active {
-  transform: translateY(1px);
-  box-shadow: 0 3px 8px rgba(30, 42, 47, 0.12);
-  filter: saturate(0.98) brightness(0.98);
 }
 
 .field-grid {
@@ -653,6 +712,49 @@ h2 {
   position: absolute;
   inset: 0;
   z-index: 1;
+}
+
+@keyframes figure-checkpoint-ghost-drift {
+  0% {
+    opacity: 0.52;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: brightness(1.05) saturate(0.94);
+  }
+
+  14% {
+    opacity: 0.44;
+  }
+
+  68% {
+    opacity: 0.18;
+    transform: translate3d(64px, -38px, 0) scale(0.64);
+    filter: brightness(1.08) saturate(0.88);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(108px, -64px, 0) scale(0.42);
+    filter: brightness(1.12) saturate(0.82);
+  }
+}
+
+.figure-checkpoint-ghost {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.figure-checkpoint-ghost-scene {
+  position: absolute;
+  inset: 0;
+  transform-origin: 86% 10%;
+  animation: figure-checkpoint-ghost-drift 920ms cubic-bezier(0.18, 0.78, 0.18, 1) forwards;
+}
+
+.figure-checkpoint-ghost .figure-svg {
+  filter: drop-shadow(0 6px 16px rgba(54, 45, 34, 0.08));
 }
 
 .figure-scroll-viewport {
@@ -951,7 +1053,7 @@ h2 {
 .panel-toolbar-button:focus-visible,
 .catalog-list-item:focus-visible,
 .catalog-list-item-action:focus-visible,
-.liked-bolt-button:focus-visible,
+.panel-action-button:focus-visible,
 .figure-corner-toggle:focus-visible,
 .figure-control-close:focus-visible,
 .figure-control-step-button:focus-visible,
@@ -964,6 +1066,15 @@ h2 {
 .figure-wheel-hotspot {
   position: absolute;
   pointer-events: auto;
+}
+
+.figure-rotation-hotspot {
+  position: absolute;
+  pointer-events: auto;
+  /* The head hotspot owns touch from the start; the rest of the mobile figure
+     remains swipeable through the scroll viewport underneath. */
+  touch-action: none;
+  cursor: ns-resize;
 }
 
 .figure-wheel-hotspot-pill {

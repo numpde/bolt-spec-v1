@@ -1,11 +1,11 @@
 (function(root, factory) {
-  const presetApi = typeof module === "object" && module.exports
-    ? require("./boltPresets.js")
+  const schemaApi = typeof module === "object" && module.exports
+    ? require("./boltSchema.js")
     : root;
   const modelApi = typeof module === "object" && module.exports
     ? require("./boltModel.js")
     : root;
-  const api = factory(presetApi, modelApi);
+  const api = factory(schemaApi, modelApi);
 
   if (typeof module === "object" && module.exports) {
     module.exports = api;
@@ -14,9 +14,9 @@
   if (root) {
     Object.assign(root, api);
   }
-})(typeof globalThis !== "undefined" ? globalThis : this, function(presetApi, modelApi) {
-  const { BOLT_FIELDS } = presetApi;
-  const { normalizeBoltSpec, getThreadedLengthMaxMm } = modelApi;
+})(typeof globalThis !== "undefined" ? globalThis : this, function(schemaApi, modelApi) {
+  const { BOLT_FIELDS, getBoltFieldSchema } = schemaApi;
+  const { getHeadDiameterMinMm, normalizeBoltSpec, getThreadedLengthMaxMm } = modelApi;
   const FIELD_CONFIG_MAP = Object.fromEntries(BOLT_FIELDS.map((field) => [field.name, field]));
   const EPSILON = 1e-9;
 
@@ -46,13 +46,34 @@
         )
       );
     } else if (fieldName === "headDiameterMm") {
-      min = Math.max(min, normalizedSpec.nominalDiameterMm + 0.2);
+      min = Math.max(min, getHeadDiameterMinMm(normalizedSpec));
     }
 
     return { min, max };
   };
 
   const sanitizeBoltFieldValue = (specLike, fieldName, rawValue) => {
+    const field = getBoltFieldSchema(fieldName);
+    const normalizedSpec = normalizeBoltSpec(specLike || {});
+
+    if (field?.type === "enum") {
+      const rawText = String(rawValue ?? "").trim();
+      const allowedValues = Array.isArray(field.options)
+        ? field.options.map((option) => option.value)
+        : [];
+      const sanitizedValue = allowedValues.includes(rawText)
+        ? rawText
+        : normalizedSpec[fieldName];
+
+      return {
+        kind: allowedValues.includes(rawText) ? "valid" : "sanitized",
+        parsedValue: rawText,
+        sanitizedValue,
+        bounds: { min: -Infinity, max: Infinity },
+        isValid: allowedValues.includes(rawText),
+      };
+    }
+
     const trimmedValue = String(rawValue ?? "").trim();
 
     if (!trimmedValue) {

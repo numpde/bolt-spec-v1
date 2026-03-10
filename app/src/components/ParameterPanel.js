@@ -1,6 +1,7 @@
 (function() {
   const { BOLT_DIMENSION_FIELDS, getBoltFieldBounds, sanitizeBoltFieldValue } = window;
   const WHEEL_LOCK_TTL_MS = 420;
+  const ENUM_WHEEL_STEP_COOLDOWN_MS = 180;
   const FIELD_MAP = Object.fromEntries(BOLT_DIMENSION_FIELDS.map((field) => [field.name, field]));
   const getStepDecimals = (stepSize) => (
     String(stepSize).includes(".")
@@ -8,6 +9,14 @@
       : 0
   );
   const formatFieldValue = (field, rawValue) => {
+    if (field.type === "enum") {
+      const matchingOption = Array.isArray(field.options)
+        ? field.options.find((option) => option.value === rawValue)
+        : null;
+
+      return matchingOption?.label || String(rawValue);
+    }
+
     const numericValue = Number(rawValue);
 
     if (!Number.isFinite(numericValue)) {
@@ -36,6 +45,7 @@
     const [focusedFieldName, setFocusedFieldName] = React.useState(null);
     const focusedFieldNameRef = React.useRef(null);
     const suppressedBlurFieldNameRef = React.useRef(null);
+    const enumWheelThrottleMapRef = React.useRef(new Map());
     const draftValuesRef = React.useRef(draftValues);
     const specRef = React.useRef(spec);
     const handlersRef = React.useRef({
@@ -159,6 +169,63 @@
         lockGlobalWheelScroll();
         handlersRef.current.onFieldWheelActivity?.(fieldName);
 
+        if (field.type === "enum") {
+          const optionValues = Array.isArray(field.options)
+            ? field.options.map((option) => option.value)
+            : [];
+
+          if (optionValues.length < 2) {
+            return;
+          }
+
+          const nowMs = Date.now();
+          const throttleUntilMs = enumWheelThrottleMapRef.current.get(fieldName) || 0;
+
+          if (nowMs < throttleUntilMs) {
+            return;
+          }
+
+          enumWheelThrottleMapRef.current.set(
+            fieldName,
+            nowMs + ENUM_WHEEL_STEP_COOLDOWN_MS
+          );
+
+          const currentValue = String(
+            draftValuesRef.current[fieldName] ?? specRef.current[fieldName] ?? ""
+          );
+          const currentIndex = optionValues.indexOf(currentValue);
+
+          if (currentIndex < 0) {
+            return;
+          }
+
+          const direction = event.deltaY < 0 ? 1 : -1;
+          const nextIndex = (
+            (currentIndex + direction) % optionValues.length +
+            optionValues.length
+          ) % optionValues.length;
+          const nextValue = optionValues[nextIndex];
+
+          if (nextValue === currentValue) {
+            return;
+          }
+
+          setDraftValues((currentDraftValues) => (
+            currentDraftValues[fieldName] === nextValue
+              ? currentDraftValues
+              : {
+                ...currentDraftValues,
+                [fieldName]: nextValue,
+              }
+          ));
+          handlersRef.current.onFieldChange?.(fieldName, nextValue);
+          return;
+        }
+
+        if (field.type !== "number") {
+          return;
+        }
+
         const rawDraftValue = String(draftValuesRef.current[fieldName] ?? "").trim();
         const currentSpec = specRef.current;
         const draftAssessment = sanitizeBoltFieldValue(currentSpec, fieldName, rawDraftValue);
@@ -210,7 +277,7 @@
     return (
       <section ref={panelRef} className="panel-card">
         <div className="panel-toolbar">
-          <p className="eyebrow">Bolt dimensions</p>
+          <p className="eyebrow">Bolt spec</p>
           {headerAction ? (
             <div className="panel-toolbar-actions">
               {headerAction}
@@ -251,6 +318,7 @@
               focusedFieldName === field.name &&
               !draftAssessment.isValid
             );
+            const isEnumField = field.type === "enum";
 
             return (
               <div className="field-row" key={field.name}>
@@ -324,22 +392,60 @@
                     <span className="field-hint">{secondaryLineText}</span>
                   )}
                 </div>
-                <input
-                  id={inputId}
-                  className={`field-input ${isRawInvalid ? "is-invalid-raw" : ""}`}
-                  data-field-name={field.name}
-                  type="number"
-                  min={fieldMin}
-                  max={fieldMax}
-                  step={field.step}
-                  value={draftValues[field.name] ?? ""}
-                  onFocus={() => {
-                    focusedFieldNameRef.current = field.name;
-                    setFocusedFieldName(field.name);
-                  }}
-                  onBlur={() => {
-                    if (suppressedBlurFieldNameRef.current === field.name) {
-                      suppressedBlurFieldNameRef.current = null;
+                {isEnumField ? (
+                  <select
+                    id={inputId}
+                    className="field-input"
+                    data-field-name={field.name}
+                    value={draftValues[field.name] ?? ""}
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+
+                      setDraftValues((currentDraftValues) => (
+                        currentDraftValues[field.name] === nextValue
+                          ? currentDraftValues
+                          : {
+                            ...currentDraftValues,
+                            [field.name]: nextValue,
+                          }
+                      ));
+                      onFieldChange(field.name, nextValue);
+                    }}
+                  >
+                    {(field.options || []).map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    id={inputId}
+                    className={`field-input ${isRawInvalid ? "is-invalid-raw" : ""}`}
+                    data-field-name={field.name}
+                    type="number"
+                    min={fieldMin}
+                    max={fieldMax}
+                    step={field.step}
+                    value={draftValues[field.name] ?? ""}
+                    onFocus={() => {
+                      focusedFieldNameRef.current = field.name;
+                      setFocusedFieldName(field.name);
+                    }}
+                    onBlur={() => {
+                      if (suppressedBlurFieldNameRef.current === field.name) {
+                        suppressedBlurFieldNameRef.current = null;
+
+                        if (focusedFieldNameRef.current === field.name) {
+                          focusedFieldNameRef.current = null;
+                        }
+
+                        setFocusedFieldName((currentFieldName) => (
+                          currentFieldName === field.name ? null : currentFieldName
+                        ));
+
+                        return;
+                      }
 
                       if (focusedFieldNameRef.current === field.name) {
                         focusedFieldNameRef.current = null;
@@ -349,50 +455,40 @@
                         currentFieldName === field.name ? null : currentFieldName
                       ));
 
-                      return;
-                    }
+                      commitDraftValue(field.name);
+                    }}
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
 
-                    if (focusedFieldNameRef.current === field.name) {
-                      focusedFieldNameRef.current = null;
-                    }
-
-                    setFocusedFieldName((currentFieldName) => (
-                      currentFieldName === field.name ? null : currentFieldName
-                    ));
-
-                    commitDraftValue(field.name);
-                  }}
-                  onChange={(event) => {
-                    const nextValue = event.target.value;
-
-                    setDraftValues((currentDraftValues) => (
-                      currentDraftValues[field.name] === nextValue
-                        ? currentDraftValues
-                        : {
-                          ...currentDraftValues,
-                          [field.name]: nextValue,
-                        }
-                    ));
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.currentTarget.blur();
-                      return;
-                    }
-
-                    if (event.key === "Escape") {
-                      focusedFieldNameRef.current = null;
-                      setFocusedFieldName((currentFieldName) => (
-                        currentFieldName === field.name ? null : currentFieldName
+                      setDraftValues((currentDraftValues) => (
+                        currentDraftValues[field.name] === nextValue
+                          ? currentDraftValues
+                          : {
+                            ...currentDraftValues,
+                            [field.name]: nextValue,
+                          }
                       ));
-                      setDraftValues((currentDraftValues) => ({
-                        ...currentDraftValues,
-                        [field.name]: String(spec[field.name] ?? ""),
-                      }));
-                      event.currentTarget.blur();
-                    }
-                  }}
-                />
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.currentTarget.blur();
+                        return;
+                      }
+
+                      if (event.key === "Escape") {
+                        focusedFieldNameRef.current = null;
+                        setFocusedFieldName((currentFieldName) => (
+                          currentFieldName === field.name ? null : currentFieldName
+                        ));
+                        setDraftValues((currentDraftValues) => ({
+                          ...currentDraftValues,
+                          [field.name]: String(spec[field.name] ?? ""),
+                        }));
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                )}
               </div>
             );
           })}

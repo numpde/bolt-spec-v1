@@ -47,6 +47,7 @@
     const trayRef = React.useRef(null);
     const isNominalDiameterField = field.name === "nominalDiameterMm";
     const isPitchField = field.name === "pitchMm";
+    const isEnumField = field.type === "enum";
 
     React.useEffect(() => {
       const tray = trayRef.current;
@@ -148,6 +149,26 @@
               })}
             </div>
           </>
+        ) : isEnumField ? (
+          <div className="figure-control-size-grid">
+            {(field.options || []).map((option) => {
+              const isActive = option.value === value;
+
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`figure-control-size-button ${isActive ? "is-active" : ""}`}
+                  onClick={() => {
+                    onInteractionActivity?.(field.name);
+                    onSliderChange(option.value);
+                  }}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
         ) : (
           <>
             {isPitchField && threadSeriesContext?.pitchOptions?.length ? (

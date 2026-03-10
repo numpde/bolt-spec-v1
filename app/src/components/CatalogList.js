@@ -51,8 +51,16 @@
       >
         {items.map((item) => {
           const isActive = item.key === selectedKey;
-          const rowClassName = `catalog-list-row ${isActive ? "is-active" : ""}`;
-          const itemClassName = `catalog-list-item ${isActive ? "is-active" : ""}`;
+          const rowClassName = [
+            "catalog-list-row",
+            isActive ? "is-active" : "",
+            item.rowClassName || "",
+          ].filter(Boolean).join(" ");
+          const itemClassName = [
+            "catalog-list-item",
+            isActive ? "is-active" : "",
+            item.itemClassName || "",
+          ].filter(Boolean).join(" ");
           const content = (
             <>
               <span className="catalog-list-title">{item.title}</span>
@@ -75,6 +83,7 @@
               key={item.key}
               className={rowClassName}
               role="listitem"
+              style={item.rowStyle}
             >
               {item.href ? (
                 <a
@@ -89,6 +98,7 @@
                   href={item.href}
                   aria-current={isActive ? "true" : undefined}
                   onClick={item.onClick}
+                  style={item.itemStyle}
                 >
                   {content}
                 </a>
@@ -105,13 +115,19 @@
                   type="button"
                   aria-pressed={isActive}
                   onClick={item.onClick}
+                  style={item.itemStyle}
                 >
                   {content}
                 </button>
               )}
               {item.onActionClick ? (
                 <button
-                  className="panel-toolbar-button panel-toolbar-icon-button catalog-list-item-action"
+                  className={[
+                    "panel-toolbar-button",
+                    "panel-toolbar-icon-button",
+                    "catalog-list-item-action",
+                    item.actionClassName || "",
+                  ].filter(Boolean).join(" ")}
                   type="button"
                   aria-label={item.actionLabel}
                   title={item.actionLabel}

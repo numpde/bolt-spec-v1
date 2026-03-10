@@ -5,20 +5,33 @@ sizeFamilyPresetKeys:
   - m6
 presets:
   m4:
-    displayName: Coarse M4
+    displayName: M4 (coarse thread)
     presetName: M4
     standardProfileKey: iso-metric-262
     nominalDiameterMm: 4.0
     pitchMm: 0.7
   m5:
-    displayName: Coarse M5
+    displayName: M5 (coarse thread)
     presetName: M5
     standardProfileKey: iso-metric-262
     nominalDiameterMm: 5.0
     pitchMm: 0.8
   m6:
-    displayName: Coarse M6
+    displayName: M6 (coarse thread)
     presetName: M6
     standardProfileKey: iso-metric-262
     nominalDiameterMm: 6.0
     pitchMm: 1.0
+  m5x18-reference:
+    displayName: Stem bolt M5 x 18 (T25)
+    presetName: M5x18
+    standardProfileKey: iso-metric-262
+    socket: T25
+    nominalDiameterMm: 5.0
+    pitchMm: 0.8
+    underHeadLengthMm: 18.0
+    threadedLengthMm: 13.0
+    headDiameterMm: 7.0
+    headHeightMm: 3.5
+    tipChamferMm: 0.5
+    socketDepthMm: 3.0

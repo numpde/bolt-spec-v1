@@ -13,6 +13,7 @@ const { renderBoltFigureSvg } = require("../app/src/utils/boltFigureRenderer.js"
 const parseArgs = (argv) => {
   const options = {
     preset: "m5",
+    rotation: 0,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -20,6 +21,12 @@ const parseArgs = (argv) => {
 
     if (token === "--preset" && argv[index + 1]) {
       options.preset = argv[index + 1];
+      index += 1;
+      continue;
+    }
+
+    if (token === "--rotation" && argv[index + 1]) {
+      options.rotation = Number(argv[index + 1]) || 0;
       index += 1;
       continue;
     }
@@ -38,9 +45,14 @@ const main = () => {
   }
 
   const previewDir = path.resolve(__dirname, "..", "app", "preview");
-  const svgPath = path.join(previewDir, `bolt-${options.preset}.svg`);
+  const rotationSuffix = options.rotation
+    ? `-r${String(options.rotation).replace(/[^\d.-]+/g, "_")}`
+    : "";
+  const svgPath = path.join(previewDir, `bolt-${options.preset}${rotationSuffix}.svg`);
   const spec = cloneBoltPreset(options.preset);
-  const svg = renderBoltFigureSvg(spec);
+  const svg = renderBoltFigureSvg(spec, {
+    axialRotationDeg: options.rotation,
+  });
 
   fs.mkdirSync(previewDir, { recursive: true });
   fs.writeFileSync(svgPath, svg, "utf8");

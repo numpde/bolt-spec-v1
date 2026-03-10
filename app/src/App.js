@@ -18,6 +18,7 @@
     extractCheckpointFromHistoryState,
     buildBoltDiagnostics,
     getThreadSeriesContext,
+    copyTextToClipboard,
   } = window;
   const {
     FieldControlTray,
@@ -29,11 +30,19 @@
   const EDITABLE_FIELD_NAMES = BOLT_FIELDS.map((field) => field.name);
   const fieldMap = Object.fromEntries(BOLT_FIELDS.map((field) => [field.name, field]));
   const COPY_FEEDBACK_MS = 1400;
+  const CHECKPOINT_GHOST_DURATION_MS = 920;
   const EXTERNAL_FIGURE_FREEZE_MS = 320;
   const PARAMS_BELOW_CATALOG_STORAGE_KEY = "bolt-params-below-catalog-v1";
   const TOP_VIEW_PREFERENCE_STORAGE_KEY = "bolt-top-view-preference-v1";
   const editableSpecDidChange = (currentSpec, nextSpec) => (
     EDITABLE_FIELD_NAMES.some((fieldName) => currentSpec[fieldName] !== nextSpec[fieldName])
+  );
+  const didSocketChangeCascade = (currentSpec, nextSpec) => (
+    currentSpec.socket !== nextSpec.socket &&
+    EDITABLE_FIELD_NAMES.some((fieldName) => (
+      fieldName !== "socket" &&
+      currentSpec[fieldName] !== nextSpec[fieldName]
+    ))
   );
 
   const readParamsBelowCatalog = () => {
@@ -72,46 +81,33 @@
     }
   };
 
-  const copyTextToClipboard = async (text) => {
-    if (navigator.clipboard?.writeText && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
-      return;
-    }
-
-    const textarea = document.createElement("textarea");
-
-    textarea.value = text;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    textarea.style.pointerEvents = "none";
-    document.body.appendChild(textarea);
-    textarea.focus();
-    textarea.select();
-
-    try {
-      if (!document.execCommand("copy")) {
-        throw new Error("Clipboard copy was rejected.");
-      }
-    } finally {
-      document.body.removeChild(textarea);
-    }
-  };
-
   const getMatchingPresetKey = (draftLikeSpec, standardProfileKey) => {
     const normalizedDraftSpec = normalizeBoltSpec(draftLikeSpec);
-    const normalizedPresetEntries = Object.entries(getBoltPresets()).map(([presetKey, preset]) => (
-      [presetKey, normalizeBoltSpec(preset)]
-    ));
+    const matchingPresetCandidates = Object.entries(getBoltPresets())
+      .map(([presetKey, preset], index) => {
+        const specifiedFieldNames = getPresetSpecifiedFieldNames(presetKey);
 
-    return (
-      normalizedPresetEntries.find(([presetKey, normalizedPreset]) => (
-        cloneBoltPreset(presetKey).standardProfileKey === standardProfileKey &&
-        getPresetSpecifiedFieldNames(presetKey).every((fieldName) => (
-          normalizedDraftSpec[fieldName] === normalizedPreset[fieldName]
+        return {
+          presetKey,
+          index,
+          specifiedFieldNames,
+          specifiedFieldCount: specifiedFieldNames.length,
+          standardProfileKey: preset.standardProfileKey,
+          normalizedPreset: normalizeBoltSpec(preset),
+        };
+      })
+      .filter((candidate) => (
+        candidate.standardProfileKey === standardProfileKey &&
+        candidate.specifiedFieldNames.every((fieldName) => (
+          normalizedDraftSpec[fieldName] === candidate.normalizedPreset[fieldName]
         ))
-      ))?.[0] || null
-    );
+      ))
+      .sort((left, right) => (
+        right.specifiedFieldCount - left.specifiedFieldCount ||
+        left.index - right.index
+      ));
+
+    return matchingPresetCandidates[0]?.presetKey || null;
   };
 
   const getDefaultAppState = () => {
@@ -119,7 +115,6 @@
     const defaultPreset = cloneBoltPreset(defaultPresetKey);
 
     return normalizeCheckpointState({
-      presetName: defaultPresetKey,
       standardProfileKey: defaultPreset.standardProfileKey,
       draftSpec: defaultPreset,
     });
@@ -139,18 +134,26 @@
 
   const App = () => {
     const initialAppState = React.useMemo(() => getInitialAppState(), []);
-    const [presetName, setPresetName] = React.useState(initialAppState.presetName);
     const [standardProfileKey, setStandardProfileKey] = React.useState(initialAppState.standardProfileKey);
     const [draftSpec, setDraftSpec] = React.useState(initialAppState.draftSpec);
     const [showTopView, setShowTopView] = React.useState(() => readTopViewPreference());
+    const [axialRotationDeg, setAxialRotationDeg] = React.useState(0);
     const [activeFieldName, setActiveFieldName] = React.useState(null);
     const [copyState, setCopyState] = React.useState("idle");
     const [copyFlashNonce, setCopyFlashNonce] = React.useState(0);
+    const [checkpointFlashNonce, setCheckpointFlashNonce] = React.useState(0);
+    const [checkpointGhost, setCheckpointGhost] = React.useState(null);
     const [isParamsBelowCatalog, setIsParamsBelowCatalog] = React.useState(() => readParamsBelowCatalog());
     const [activeExternalFreezeFieldName, setActiveExternalFreezeFieldName] = React.useState(null);
     const pendingHistorySyncRef = React.useRef(null);
     const copyFeedbackTimerRef = React.useRef(null);
     const externalFigureFreezeTimerRef = React.useRef(null);
+    const checkpointGhostIdRef = React.useRef(0);
+    const lastDurableCheckpointUrlRef = React.useRef(
+      typeof window !== "undefined"
+        ? buildCheckpointUrl(initialAppState, window.location)
+        : null
+    );
     const pointerInitiatedCopyRef = React.useRef(false);
     const deferredDraftSpec = React.useDeferredValue(draftSpec);
     const spec = React.useMemo(() => normalizeBoltSpec(draftSpec), [draftSpec]);
@@ -173,26 +176,24 @@
       grouped[diagnostic.fieldName] = bucket;
       return grouped;
     }, {}), [diagnostics]);
-    const coerceDraftSpec = React.useCallback((nextDraftSpec, nextPresetName = presetName) => {
+    const coerceDraftSpec = React.useCallback((nextDraftSpec) => {
       const checkpointState = normalizeCheckpointState({
-        presetName: nextPresetName,
+        standardProfileKey,
         draftSpec: nextDraftSpec,
       });
 
       return checkpointState.draftSpec;
-    }, [presetName]);
+    }, [standardProfileKey]);
 
     const buildCurrentAppState = React.useCallback((overrides = {}) => (
       normalizeCheckpointState({
-        presetName: activePresetKey || presetName,
         standardProfileKey,
         draftSpec,
         ...overrides,
       })
-    ), [activePresetKey, draftSpec, presetName, standardProfileKey]);
+    ), [draftSpec, standardProfileKey]);
 
     const applyAppState = React.useCallback((nextAppState) => {
-      setPresetName(nextAppState.presetName);
       setStandardProfileKey(nextAppState.standardProfileKey);
       setDraftSpec(nextAppState.draftSpec);
     }, []);
@@ -235,6 +236,59 @@
       return null;
     }, [cancelPendingHistorySync, commitCheckpointToHistory]);
 
+    const pushCheckpointToHistory = React.useCallback((checkpointLike, {
+      applyState = false,
+      flushFallbackCheckpointLike = null,
+      ghostCheckpointLike = null,
+    } = {}) => {
+      if (flushFallbackCheckpointLike) {
+        flushPendingHistorySync(flushFallbackCheckpointLike);
+      }
+
+      const checkpointState = normalizeCheckpointState(checkpointLike);
+      const ghostCheckpointState = normalizeCheckpointState(
+        ghostCheckpointLike || checkpointState
+      );
+      const checkpointUrl = buildCheckpointUrl(checkpointState, window.location);
+      const isDuplicateOfCurrentCheckpoint = (
+        lastDurableCheckpointUrlRef.current != null &&
+        lastDurableCheckpointUrlRef.current === checkpointUrl
+      );
+
+      if (isDuplicateOfCurrentCheckpoint) {
+        if (applyState) {
+          applyAppState(checkpointState);
+        }
+
+        return checkpointState;
+      }
+
+      commitCheckpointToHistory("push", checkpointState);
+      lastDurableCheckpointUrlRef.current = checkpointUrl;
+      setCheckpointFlashNonce((current) => current + 1);
+
+      checkpointGhostIdRef.current += 1;
+      setCheckpointGhost({
+        id: checkpointGhostIdRef.current,
+        spec: ghostCheckpointState.draftSpec,
+        showTopView,
+        axialRotationDeg,
+        durationMs: CHECKPOINT_GHOST_DURATION_MS,
+      });
+
+      if (applyState) {
+        applyAppState(checkpointState);
+      }
+
+      return checkpointState;
+    }, [
+      axialRotationDeg,
+      applyAppState,
+      commitCheckpointToHistory,
+      flushPendingHistorySync,
+      showTopView,
+    ]);
+
     const scheduleHistorySync = React.useCallback((checkpointLike) => {
       const checkpointState = normalizeCheckpointState(checkpointLike);
 
@@ -262,6 +316,7 @@
           getDefaultAppState()
         );
 
+        lastDurableCheckpointUrlRef.current = buildCheckpointUrl(nextCheckpoint, window.location);
         applyAppState(nextCheckpoint);
       };
 
@@ -287,6 +342,24 @@
     }, []);
 
     React.useEffect(() => {
+      if (!checkpointGhost?.id) {
+        return undefined;
+      }
+
+      const timerId = window.setTimeout(() => {
+        setCheckpointGhost((current) => (
+          current?.id === checkpointGhost.id
+            ? null
+            : current
+        ));
+      }, checkpointGhost.durationMs || CHECKPOINT_GHOST_DURATION_MS);
+
+      return () => {
+        window.clearTimeout(timerId);
+      };
+    }, [checkpointGhost]);
+
+    React.useEffect(() => {
       try {
         window.localStorage.setItem(
           PARAMS_BELOW_CATALOG_STORAGE_KEY,
@@ -310,96 +383,165 @@
 
     const handlePresetSelect = React.useCallback((nextPresetName) => {
       const currentCheckpoint = buildCurrentAppState();
-      flushPendingHistorySync(currentCheckpoint);
       const nextPreset = cloneBoltPreset(nextPresetName);
       const nextDraftSpec = coerceDraftSpec({
         ...draftSpec,
         ...getPresetEditableOverrides(nextPreset),
-      }, nextPresetName);
+      });
 
       const nextCheckpoint = normalizeCheckpointState({
-        presetName: nextPresetName,
         standardProfileKey: nextPreset.standardProfileKey,
         draftSpec: nextDraftSpec,
       });
 
-      commitCheckpointToHistory("push", nextCheckpoint);
-      applyAppState(nextCheckpoint);
+      pushCheckpointToHistory(nextCheckpoint, {
+        applyState: true,
+        flushFallbackCheckpointLike: currentCheckpoint,
+        ghostCheckpointLike: currentCheckpoint,
+      });
     }, [
-      applyAppState,
       buildCurrentAppState,
-      commitCheckpointToHistory,
       coerceDraftSpec,
       draftSpec,
-      flushPendingHistorySync,
+      pushCheckpointToHistory,
     ]);
 
     const handleLikedCheckpointSelect = React.useCallback((checkpointLike) => {
       const currentCheckpoint = buildCurrentAppState();
-      flushPendingHistorySync(currentCheckpoint);
-
       const nextCheckpoint = normalizeCheckpointState(checkpointLike);
 
-      commitCheckpointToHistory("push", nextCheckpoint);
-      applyAppState(nextCheckpoint);
+      pushCheckpointToHistory(nextCheckpoint, {
+        applyState: true,
+        flushFallbackCheckpointLike: currentCheckpoint,
+        ghostCheckpointLike: currentCheckpoint,
+      });
     }, [
-      applyAppState,
       buildCurrentAppState,
-      commitCheckpointToHistory,
-      flushPendingHistorySync,
+      pushCheckpointToHistory,
+    ]);
+
+    const checkpointCurrentGeometry = React.useCallback(() => {
+      const currentCheckpoint = buildCurrentAppState();
+
+      pushCheckpointToHistory(currentCheckpoint, {
+        flushFallbackCheckpointLike: currentCheckpoint,
+      });
+    }, [
+      buildCurrentAppState,
+      pushCheckpointToHistory,
     ]);
 
     const handleFieldChange = React.useCallback((fieldName, nextValue) => {
-      setDraftSpec((current) => {
-        const nextValueAssessment = sanitizeBoltFieldValue(current, fieldName, nextValue);
+      const field = fieldMap[fieldName];
 
-        if (!Number.isFinite(nextValueAssessment.sanitizedValue)) {
-          return current;
-        }
+      if (field?.type !== "enum") {
+        setDraftSpec((current) => {
+          const nextValueAssessment = sanitizeBoltFieldValue(current, fieldName, nextValue);
 
-        const nextDraftSpec = coerceDraftSpec({
-          ...current,
-          [fieldName]: nextValueAssessment.sanitizedValue,
+          if (nextValueAssessment.sanitizedValue == null) {
+            return current;
+          }
+
+          const nextDraftSpec = coerceDraftSpec({
+            ...current,
+            [fieldName]: nextValueAssessment.sanitizedValue,
+          });
+
+          return editableSpecDidChange(current, nextDraftSpec)
+            ? nextDraftSpec
+            : current;
         });
+        return;
+      }
 
-        return editableSpecDidChange(current, nextDraftSpec)
-          ? nextDraftSpec
-          : current;
+      const nextValueAssessment = sanitizeBoltFieldValue(draftSpec, fieldName, nextValue);
+
+      if (nextValueAssessment.sanitizedValue == null) {
+        return;
+      }
+
+      const nextDraftSpec = coerceDraftSpec({
+        ...draftSpec,
+        [fieldName]: nextValueAssessment.sanitizedValue,
       });
-    }, [coerceDraftSpec]);
+
+      if (!editableSpecDidChange(draftSpec, nextDraftSpec)) {
+        return;
+      }
+
+      if (didSocketChangeCascade(draftSpec, nextDraftSpec)) {
+        checkpointCurrentGeometry();
+      }
+
+      setDraftSpec(nextDraftSpec);
+    }, [checkpointCurrentGeometry, coerceDraftSpec, draftSpec]);
 
     const applyFieldStepDelta = React.useCallback((fieldName, stepDelta) => {
       const field = fieldMap[fieldName];
 
-      if (!field) {
+      if (!field || !Number.isFinite(stepDelta) || stepDelta === 0) {
         return;
       }
 
-      setDraftSpec((current) => {
-        const currentValue = Number(current[fieldName]);
-        const safeCurrentValue = Number.isFinite(currentValue)
-          ? currentValue
-          : Number(field.min ?? 0);
-        const nextValue = safeCurrentValue + stepDelta * field.step;
-        const bounds = getBoltFieldBounds(current, fieldName);
-        const clampedValue = Math.min(
-          Math.max(nextValue, bounds.min ?? nextValue),
-          bounds.max ?? nextValue
-        );
-        const decimals = String(field.step).includes(".")
-          ? String(field.step).split(".")[1].length
-          : 0;
+      if (field.type === "enum") {
+        const optionValues = Array.isArray(field.options)
+          ? field.options.map((option) => option.value)
+          : [];
+        const currentIndex = optionValues.indexOf(draftSpec[fieldName]);
 
+        if (currentIndex < 0 || optionValues.length < 2) {
+          return;
+        }
+
+        const normalizedDelta = Math.trunc(stepDelta);
+        const nextIndex = (
+          (currentIndex + normalizedDelta) % optionValues.length +
+          optionValues.length
+        ) % optionValues.length;
         const nextDraftSpec = coerceDraftSpec({
-          ...current,
-          [fieldName]: Number(clampedValue.toFixed(decimals)),
+          ...draftSpec,
+          [fieldName]: optionValues[nextIndex],
         });
 
-        return editableSpecDidChange(current, nextDraftSpec)
-          ? nextDraftSpec
-          : current;
-      });
-    }, [coerceDraftSpec]);
+        if (!editableSpecDidChange(draftSpec, nextDraftSpec)) {
+          return;
+        }
+
+        if (didSocketChangeCascade(draftSpec, nextDraftSpec)) {
+          checkpointCurrentGeometry();
+        }
+
+        setDraftSpec(nextDraftSpec);
+        return;
+      }
+
+      if (field.type === "number") {
+        setDraftSpec((current) => {
+          const currentValue = Number(current[fieldName]);
+          const safeCurrentValue = Number.isFinite(currentValue)
+            ? currentValue
+            : Number(field.min ?? 0);
+          const nextValue = safeCurrentValue + stepDelta * field.step;
+          const bounds = getBoltFieldBounds(current, fieldName);
+          const clampedValue = Math.min(
+            Math.max(nextValue, bounds.min ?? nextValue),
+            bounds.max ?? nextValue
+          );
+          const decimals = String(field.step).includes(".")
+            ? String(field.step).split(".")[1].length
+            : 0;
+
+          const nextDraftSpec = coerceDraftSpec({
+            ...current,
+            [fieldName]: Number(clampedValue.toFixed(decimals)),
+          });
+
+          return editableSpecDidChange(current, nextDraftSpec)
+            ? nextDraftSpec
+            : current;
+        });
+      }
+    }, [checkpointCurrentGeometry, coerceDraftSpec, draftSpec]);
 
     const handleFieldWheelAdjust = React.useCallback((fieldName, direction) => {
       applyFieldStepDelta(fieldName, direction);
@@ -454,11 +596,9 @@
     const handleApplySizeFamily = React.useCallback((sizePresetKey) => {
       const nextPreset = cloneBoltPreset(sizePresetKey);
 
-      setPresetName(sizePresetKey);
       setStandardProfileKey(nextPreset.standardProfileKey);
       setDraftSpec((current) => coerceDraftSpec(
-        applySizeFamilyToDraftSpec(current, sizePresetKey),
-        sizePresetKey
+        applySizeFamilyToDraftSpec(current, sizePresetKey)
       ));
     }, [coerceDraftSpec]);
 
@@ -467,8 +607,11 @@
     }, []);
 
     const handleDownloadCurrentFigure = React.useCallback(async () => {
-      await downloadCheckpointFigure(currentCheckpoint, { showTopView });
-    }, [currentCheckpoint, showTopView]);
+      await downloadCheckpointFigure(currentCheckpoint, {
+        showTopView,
+        axialRotationDeg,
+      });
+    }, [axialRotationDeg, currentCheckpoint, showTopView]);
 
     const triggerCopyFlash = React.useCallback(() => {
       setCopyFlashNonce((current) => current + 1);
@@ -538,6 +681,14 @@
         <path d="M4 15.5H16" />
       </svg>
     );
+    const checkpointIcon = (
+      <svg className="panel-toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M6 4.25H14" />
+        <path d="M6 4.25V15.75" />
+        <path d="M14 4.25V15.75" />
+        <path d="M6 10L10 8L14 10" />
+      </svg>
+    );
     const copyIcon = (
       <svg className="panel-toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
         <rect x="7" y="5" width="8.5" height="10" rx="1.8" />
@@ -549,8 +700,8 @@
     }, []);
 
     const paramsPlacementLabel = isParamsBelowCatalog
-      ? "Move editable parameters above liked bolts and preset baselines"
-      : "Move editable parameters below liked bolts and preset baselines";
+      ? "Move Bolt spec above My picks and Presets"
+      : "Move Bolt spec below My picks and Presets";
     const paramsPlacementIcon = isParamsBelowCatalog ? (
       <svg className="panel-toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
         <path d="M10 4.25V15.75" />
@@ -568,6 +719,22 @@
         <div className="panel-toolbar">
           <p className="eyebrow">BYOB -- build your own bolt</p>
           <div className="panel-toolbar-actions">
+            <button
+              type="button"
+              className="panel-toolbar-button panel-toolbar-icon-button"
+              onClick={checkpointCurrentGeometry}
+              aria-label="Checkpoint"
+              title="Checkpoint"
+            >
+              {checkpointFlashNonce > 0 ? (
+                <span
+                  key={checkpointFlashNonce}
+                  className="panel-toolbar-button-flash panel-toolbar-button-flash--checkpoint"
+                  aria-hidden="true"
+                />
+              ) : null}
+              {checkpointIcon}
+            </button>
             <button
               type="button"
               className="panel-toolbar-button panel-toolbar-icon-button"
@@ -591,13 +758,16 @@
         </div>
         <BoltFigure
           spec={spec}
+          axialRotationDeg={axialRotationDeg}
           onAdjustField={handleFieldWheelAdjust}
           onStepAdjustField={handleFieldStepAdjust}
+          onSetAxialRotation={setAxialRotationDeg}
           onSelectField={setActiveFieldName}
           onDismissField={handleCloseActiveField}
           onSetTopView={setShowTopView}
           activeFieldName={activeFieldName}
           copyFlashNonce={copyFlashNonce}
+          checkpointGhost={checkpointGhost}
           showTopView={showTopView}
           externalFreezeFieldName={activeExternalFreezeFieldName}
         />

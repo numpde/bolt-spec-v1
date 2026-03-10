@@ -4,6 +4,7 @@
     buildBoltFigureScene,
     buildDragHotspots,
     buildWheelHotspots,
+    getBoltFieldBounds,
     getBoltFigureAriaLabel,
     normalizeBoltSpec,
   } = window;
@@ -21,9 +22,18 @@
   const VISUAL_IDLE_WINDOW_MS = 56;
   const HIGH_CHURN_COOLDOWN_MS = 140;
   const WHEEL_ACTIVE_COOLDOWN_MS = 220;
+  const ENUM_WHEEL_STEP_COOLDOWN_MS = 180;
   const COPY_FLASH_MS = 760;
   const CONSTRAINT_FLASH_COOLDOWN_MS = 520;
   const OVERLAY_REFIT_SETTLE_MS = 260;
+  const ROTATION_DRAG_THRESHOLD_PX = 8;
+  const ROTATION_DEGREES_PER_PX = 1;
+  const ROTATION_DRAG_DIRECTION = 1;
+  const ROTATION_INERTIA_SAMPLE_WINDOW_MS = 110;
+  const ROTATION_INERTIA_RELEASE_WINDOW_MS = 90;
+  const ROTATION_INERTIA_MIN_VELOCITY_DEG_PER_MS = 0.04;
+  const ROTATION_INERTIA_FRICTION_PER_MS = 0.992;
+  const ROTATION_INERTIA_MAX_DURATION_MS = 900;
   const MOBILE_MEDIA_QUERY = "(max-width: 560px)";
   const MOBILE_SCROLL_SNAP_DELAY_MS = 140;
   const MOBILE_PROGRAMMATIC_SCROLL_SETTLE_MS = 320;
@@ -32,6 +42,48 @@
   const getGlobalWheelLockUntil = () => Number(globalThis.__BOLT_WHEEL_LOCK_UNTIL__ || 0);
   const lockGlobalWheelScroll = (ttlMs = WHEEL_LOCK_TTL_MS) => {
     globalThis.__BOLT_WHEEL_LOCK_UNTIL__ = Date.now() + ttlMs;
+  };
+  const normalizeAngleDeg = (angleDeg = 0) => {
+    const normalized = Number(angleDeg) % 360;
+
+    return normalized < 0 ? normalized + 360 : normalized;
+  };
+  const getRotationSnapStepDeg = (specLike) => (
+    Number(specLike?.socketRotationSnapStepDeg) || 0
+  );
+  const snapAngleToSocket = (angleDeg, specLike) => {
+    const snapStepDeg = getRotationSnapStepDeg(specLike);
+    const normalizedAngleDeg = normalizeAngleDeg(angleDeg);
+
+    if (!(Number.isFinite(snapStepDeg) && snapStepDeg > 0)) {
+      return normalizedAngleDeg;
+    }
+
+    return normalizeAngleDeg(
+      Math.round(normalizedAngleDeg / snapStepDeg) * snapStepDeg
+    );
+  };
+  const stepSocketAngle = (angleDeg, direction, specLike) => {
+    const snapStepDeg = getRotationSnapStepDeg(specLike);
+
+    if (!(Number.isFinite(snapStepDeg) && snapStepDeg > 0)) {
+      return normalizeAngleDeg(angleDeg);
+    }
+
+    return normalizeAngleDeg(
+      snapAngleToSocket(angleDeg, specLike) + direction * snapStepDeg
+    );
+  };
+  const getSignedAngleDeltaDeg = (fromAngleDeg, toAngleDeg) => {
+    let delta = normalizeAngleDeg(toAngleDeg) - normalizeAngleDeg(fromAngleDeg);
+
+    if (delta > 180) {
+      delta -= 360;
+    } else if (delta < -180) {
+      delta += 360;
+    }
+
+    return delta;
   };
   const clearScheduledTimer = (timerRef) => {
     if (timerRef.current == null) {
@@ -135,32 +187,7 @@
     return values;
   };
 
-  const getFieldBounds = (spec, fieldName) => {
-    const field = FIELD_CONFIG_MAP[fieldName];
-
-    if (!field) {
-      return { min: -Infinity, max: Infinity };
-    }
-
-    const normalized = normalizeBoltSpec(spec);
-    let min = Number.isFinite(field.min) ? field.min : -Infinity;
-    let max = Number.isFinite(field.max) ? field.max : Infinity;
-
-    if (fieldName === "threadedLengthMm") {
-      max = Math.min(max, normalized.underHeadLengthMm - 1);
-    } else if (fieldName === "socketDepthMm") {
-      max = Math.min(max, normalized.headHeightMm);
-    } else if (fieldName === "tipChamferMm") {
-      max = Math.min(
-        max,
-        Math.min(normalized.underHeadLengthMm * 0.33, normalized.nominalDiameterMm * 0.5)
-      );
-    } else if (fieldName === "headDiameterMm") {
-      min = Math.max(min, normalized.nominalDiameterMm + 0.2);
-    }
-
-    return { min, max };
-  };
+  const getFieldBounds = (spec, fieldName) => getBoltFieldBounds(spec, fieldName);
 
   const snapshotSceneFrame = (scene) => ({
     viewMinX: scene.viewMinX,
@@ -196,6 +223,7 @@
     frameHeight = null,
     frameMinX = null,
     textScale = 1,
+    showBackground = true,
   }) => {
     const {
       spec,
@@ -208,7 +236,7 @@
       topCenterY,
       topCircleRadiusPx,
       sideOutlinePath,
-      torxPath,
+      socketPath,
       socketHiddenLines,
       threadLines,
       dimensions,
@@ -233,7 +261,9 @@
       >
         <style>{FIGURE_SVG_STYLE}</style>
         {mobileTextOverride ? <style>{mobileTextOverride}</style> : null}
-        <rect x={svgViewMinX} y="0" width={svgViewWidth} height={svgViewHeight} fill="#f7f1e8" />
+        {showBackground ? (
+          <rect x={svgViewMinX} y="0" width={svgViewWidth} height={svgViewHeight} fill="#f7f1e8" />
+        ) : null}
         <line className="figure-centerline" x1={centerline.x1} y1={centerline.y1} x2={centerline.x2} y2={centerline.y2} />
         <path className="figure-line" d={sideOutlinePath} />
         {threadLines.top.map((line, index) => (
@@ -302,7 +332,7 @@
         {showTopView ? (
           <circle className="figure-line" cx={centerX} cy={topCenterY} r={topCircleRadiusPx} />
         ) : null}
-        {showTopView ? <path className="figure-line" d={torxPath} /> : null}
+        {showTopView ? <path className="figure-line" d={socketPath} /> : null}
         {showTopView ? (
           <text
             className="figure-text"
@@ -310,7 +340,7 @@
             x={centerX}
             y={topCenterY + topCircleRadiusPx + 26}
           >
-            {spec.driveLabel}
+            {spec.socket}
           </text>
         ) : null}
       </svg>
@@ -319,13 +349,16 @@
 
   const BoltFigure = ({
     spec,
+    axialRotationDeg = 0,
     onAdjustField,
     onStepAdjustField,
+    onSetAxialRotation,
     onSelectField,
     onDismissField,
     onSetTopView,
     activeFieldName = null,
     copyFlashNonce = 0,
+    checkpointGhost = null,
     showTopView = true,
     externalFreezeFieldName = null,
   }) => {
@@ -333,7 +366,11 @@
     const scrollViewportRef = React.useRef(null);
     const contentRef = React.useRef(null);
     const wheelLockUntilRef = React.useRef(0);
+    const enumWheelThrottleMapRef = React.useRef(new Map());
     const dragTraceRef = React.useRef(null);
+    const rotationPendingRef = React.useRef(null);
+    const rotationGestureRef = React.useRef(null);
+    const rotationInertiaRef = React.useRef(null);
     const dragPendingRef = React.useRef(null);
     const dragGestureRef = React.useRef(null);
     const dragDebounceRef = React.useRef(null);
@@ -349,6 +386,7 @@
     const lastVisualCommitMsRef = React.useRef(-Infinity);
     const latestVisualStateRef = React.useRef({
       spec,
+      axialRotationDeg,
       showTopView,
       activeFieldName,
     });
@@ -358,6 +396,7 @@
     });
     const [visualState, setVisualState] = React.useState(() => ({
       spec,
+      axialRotationDeg,
       showTopView,
       activeFieldName,
     }));
@@ -365,6 +404,7 @@
     const [activeInteractionFocus, setActiveInteractionFocus] = React.useState(null);
     const [activeDragHotspotKey, setActiveDragHotspotKey] = React.useState(null);
     const [activeDragFieldName, setActiveDragFieldName] = React.useState(null);
+    const [isRotationDragActive, setIsRotationDragActive] = React.useState(false);
     const [activeDragOverlayRect, setActiveDragOverlayRect] = React.useState(null);
     const [frozenDragFrame, setFrozenDragFrame] = React.useState(null);
     const [frozenExternalLayout, setFrozenExternalLayout] = React.useState(null);
@@ -386,12 +426,28 @@
       showTopView: isMobileViewport ? true : visualState.showTopView,
       detailLevel: renderDetailLevel,
       layoutMode: isMobileViewport ? "mobile-scroll" : "default",
-    }), [isMobileViewport, renderDetailLevel, visualState.showTopView]);
+      axialRotationDeg: visualState.axialRotationDeg,
+    }), [isMobileViewport, renderDetailLevel, visualState.axialRotationDeg, visualState.showTopView]);
 
     const scene = React.useMemo(
       () => buildBoltFigureScene(visualState.spec, sceneOptions),
       [sceneOptions, visualState.spec]
     );
+    const checkpointGhostScene = React.useMemo(() => {
+      if (!checkpointGhost?.spec) {
+        return null;
+      }
+
+      return buildBoltFigureScene(checkpointGhost.spec, {
+        showTopView: isMobileViewport ? true : checkpointGhost.showTopView,
+        detailLevel: "full",
+        layoutMode: isMobileViewport ? "mobile-scroll" : "default",
+        axialRotationDeg: checkpointGhost.axialRotationDeg || 0,
+      });
+    }, [checkpointGhost, isMobileViewport]);
+    const checkpointGhostFrame = checkpointGhostScene
+      ? snapshotSceneFrame(checkpointGhostScene)
+      : null;
     const renderFrame = (
       frozenDragFrame ||
       frozenExternalLayout?.frame ||
@@ -408,6 +464,10 @@
       wheelHotspots
     );
     const visibleDragHotspots = React.useMemo(() => {
+      if (isRotationDragActive || activeInteractionFocus?.type === "rotation") {
+        return [];
+      }
+
       if (activeDragHotspotKey) {
         return renderDragHotspots.filter((hotspot) => hotspot.key === activeDragHotspotKey);
       }
@@ -425,8 +485,12 @@
       }
 
       return renderDragHotspots;
-    }, [activeDragHotspotKey, activeInteractionFocus, activeWheelFieldName, renderDragHotspots, visualState.activeFieldName]);
+    }, [activeDragHotspotKey, activeInteractionFocus, activeWheelFieldName, isRotationDragActive, renderDragHotspots, visualState.activeFieldName]);
     const visibleWheelHotspots = React.useMemo(() => {
+      if (isRotationDragActive || activeInteractionFocus?.type === "rotation") {
+        return [];
+      }
+
       if (activeDragHotspotKey) {
         return [];
       }
@@ -444,12 +508,13 @@
       }
 
       return renderWheelHotspots;
-    }, [activeDragHotspotKey, activeInteractionFocus, activeWheelFieldName, renderWheelHotspots, visualState.activeFieldName]);
+    }, [activeDragHotspotKey, activeInteractionFocus, activeWheelFieldName, isRotationDragActive, renderWheelHotspots, visualState.activeFieldName]);
     const sceneRef = React.useRef(scene);
     const dragHotspotsRef = React.useRef(dragHotspots);
     const wheelHotspotsRef = React.useRef(wheelHotspots);
     const frozenDragFrameRef = React.useRef(frozenDragFrame);
     const specRef = React.useRef(spec);
+    const axialRotationDegRef = React.useRef(axialRotationDeg);
     const showTopViewRef = React.useRef(showTopView);
     const isMobileViewportRef = React.useRef(isMobileViewport);
     const hasDiscoveredMobileSwipeRef = React.useRef(hasDiscoveredMobileSwipe);
@@ -466,6 +531,28 @@
       programmaticScrollRef.current = null;
       clearProgrammaticScrollSettleTimer();
     }, [clearProgrammaticScrollSettleTimer]);
+
+    const cancelRotationInertia = React.useCallback((shouldSnap = false) => {
+      const activeInertia = rotationInertiaRef.current;
+
+      if (!activeInertia) {
+        return;
+      }
+
+      if (activeInertia.frameId != null) {
+        window.cancelAnimationFrame(activeInertia.frameId);
+      }
+
+      rotationInertiaRef.current = null;
+
+      if (shouldSnap) {
+        const snappedAngleDeg = snapAngleToSocket(activeInertia.angleDeg, specRef.current);
+
+        if (Math.abs(snappedAngleDeg - activeInertia.angleDeg) > 0.001) {
+          onSetAxialRotation?.(snappedAngleDeg);
+        }
+      }
+    }, [onSetAxialRotation]);
 
     const isScrollTargetReached = React.useCallback((viewport, targetLeft) => (
       Math.abs(viewport.scrollLeft - targetLeft) <= 1
@@ -528,6 +615,7 @@
       if (frozenExternalLayout) {
         const visualStateIsCurrent = (
           visualState.spec === spec &&
+          visualState.axialRotationDeg === axialRotationDeg &&
           visualState.showTopView === showTopView &&
           visualState.activeFieldName === activeFieldName
         );
@@ -553,11 +641,13 @@
       showTopView,
       spec,
       visualState,
+      axialRotationDeg,
     ]);
 
     React.useLayoutEffect(() => {
       latestVisualStateRef.current = {
         spec,
+        axialRotationDeg,
         showTopView,
         activeFieldName,
       };
@@ -570,6 +660,7 @@
         setVisualState((currentVisualState) => {
           if (
             currentVisualState.spec === nextVisualState.spec &&
+            currentVisualState.axialRotationDeg === nextVisualState.axialRotationDeg &&
             currentVisualState.showTopView === nextVisualState.showTopView &&
             currentVisualState.activeFieldName === nextVisualState.activeFieldName
           ) {
@@ -593,6 +684,7 @@
 
         setVisualState((currentVisualState) => (
           currentVisualState.spec === scheduledVisualState.spec &&
+          currentVisualState.axialRotationDeg === scheduledVisualState.axialRotationDeg &&
           currentVisualState.showTopView === scheduledVisualState.showTopView &&
           currentVisualState.activeFieldName === scheduledVisualState.activeFieldName
             ? currentVisualState
@@ -602,7 +694,7 @@
             )
         ));
       });
-    }, [spec, showTopView, activeFieldName]);
+    }, [spec, axialRotationDeg, showTopView, activeFieldName]);
 
     React.useEffect(() => () => {
       if (visualFrameRef.current != null) {
@@ -733,6 +825,7 @@
       wheelHotspotsRef.current = wheelHotspots;
       frozenDragFrameRef.current = frozenDragFrame;
       specRef.current = spec;
+      axialRotationDegRef.current = axialRotationDeg;
       showTopViewRef.current = showTopView;
       isMobileViewportRef.current = isMobileViewport;
       hasDiscoveredMobileSwipeRef.current = hasDiscoveredMobileSwipe;
@@ -744,6 +837,7 @@
       scene,
       showTopView,
       spec,
+      axialRotationDeg,
       wheelHotspots,
     ]);
 
@@ -1307,9 +1401,161 @@
         dragGestureRef.current = null;
       };
 
+      const clearPendingRotation = () => {
+        if (rotationPendingRef.current?.pointerId != null) {
+          releaseCapturedPointer(rotationPendingRef.current.pointerId);
+        }
+
+        rotationPendingRef.current = null;
+        setIsMobileDragScrollLocked(false);
+      };
+
+      const clearActiveRotation = () => {
+        setIsRotationDragActive(false);
+        setIsMobileDragScrollLocked(false);
+
+        if (rotationGestureRef.current?.pointerId != null) {
+          releaseCapturedPointer(rotationGestureRef.current.pointerId);
+        }
+
+        rotationGestureRef.current = null;
+      };
+
+      const startRotationInertia = (initialVelocityDegPerMs) => {
+        if (!Number.isFinite(initialVelocityDegPerMs)) {
+          return false;
+        }
+
+        const startingVelocity = Math.abs(initialVelocityDegPerMs) >= ROTATION_INERTIA_MIN_VELOCITY_DEG_PER_MS
+          ? initialVelocityDegPerMs
+          : 0;
+
+        if (!startingVelocity) {
+          return false;
+        }
+
+        cancelRotationInertia(false);
+
+        const inertiaState = {
+          angleDeg: axialRotationDegRef.current,
+          velocityDegPerMs: startingVelocity,
+          startedAtMs: performance.now(),
+          lastFrameMs: performance.now(),
+          frameId: null,
+        };
+
+        const tick = (nowMs) => {
+          const activeInertia = rotationInertiaRef.current;
+
+          if (!activeInertia || activeInertia !== inertiaState) {
+            return;
+          }
+
+          const dtMs = Math.max(1, nowMs - activeInertia.lastFrameMs);
+          const elapsedMs = nowMs - activeInertia.startedAtMs;
+          const nextAngleDeg = normalizeAngleDeg(
+            activeInertia.angleDeg + activeInertia.velocityDegPerMs * dtMs
+          );
+          const nextVelocityDegPerMs = (
+            activeInertia.velocityDegPerMs *
+            Math.pow(ROTATION_INERTIA_FRICTION_PER_MS, dtMs)
+          );
+
+          activeInertia.angleDeg = nextAngleDeg;
+          activeInertia.velocityDegPerMs = nextVelocityDegPerMs;
+          activeInertia.lastFrameMs = nowMs;
+
+          markHighChurn({ type: "rotation" });
+          onSetAxialRotation?.(nextAngleDeg);
+
+          if (
+            Math.abs(nextVelocityDegPerMs) < ROTATION_INERTIA_MIN_VELOCITY_DEG_PER_MS ||
+            elapsedMs >= ROTATION_INERTIA_MAX_DURATION_MS
+          ) {
+            cancelRotationInertia(true);
+            return;
+          }
+
+          activeInertia.frameId = window.requestAnimationFrame(tick);
+        };
+
+        rotationInertiaRef.current = inertiaState;
+        inertiaState.frameId = window.requestAnimationFrame(tick);
+        markHighChurn({ type: "rotation" });
+        return true;
+      };
+
+      const activateRotation = () => {
+        const pendingRotation = rotationPendingRef.current;
+
+        if (!pendingRotation) {
+          return;
+        }
+
+        rotationGestureRef.current = {
+          pointerId: pendingRotation.pointerId,
+          startClientX: pendingRotation.startClientX,
+          startClientY: pendingRotation.startClientY,
+          startAngleDeg: pendingRotation.startAngleDeg,
+        };
+        clearPendingRotation();
+
+        try {
+          container.setPointerCapture(pendingRotation.pointerId);
+        } catch (error) {
+          // Ignore capture failures; the drag can continue without it.
+        }
+
+        if (isMobileViewportRef.current) {
+          setIsMobileDragScrollLocked(true);
+        }
+
+        cancelRotationInertia(false);
+        setIsRotationDragActive(true);
+        markHighChurn({ type: "rotation" });
+      };
+
+      const updateRotationGesture = (event) => {
+        const rotationGesture = rotationGestureRef.current;
+
+        if (!rotationGesture || rotationGesture.pointerId !== event.pointerId) {
+          return;
+        }
+
+        const nextAngleDeg = normalizeAngleDeg(
+          rotationGesture.startAngleDeg +
+          (event.clientY - rotationGesture.startClientY) *
+          ROTATION_DEGREES_PER_PX *
+          ROTATION_DRAG_DIRECTION
+        );
+
+        if (Math.abs(nextAngleDeg - axialRotationDegRef.current) < 0.001) {
+          return;
+        }
+
+        if (event.cancelable) {
+          event.preventDefault();
+        }
+
+        const nowMs = performance.now();
+
+        rotationGesture.recentSamples = (
+          (rotationGesture.recentSamples || [])
+            .filter((sample) => nowMs - sample.tMs <= ROTATION_INERTIA_SAMPLE_WINDOW_MS)
+        );
+        rotationGesture.recentSamples.push({
+          tMs: nowMs,
+          angleDeg: nextAngleDeg,
+        });
+
+        markHighChurn({ type: "rotation" });
+        onSetAxialRotation?.(nextAngleDeg);
+      };
+
       const buildSceneForCurrentLayout = (nextSpec) => buildBoltFigureScene(nextSpec, {
         showTopView: isMobileViewportRef.current ? true : showTopViewRef.current,
         layoutMode: isMobileViewportRef.current ? "mobile-scroll" : "default",
+        axialRotationDeg: axialRotationDegRef.current,
       });
 
       const activatePendingDrag = () => {
@@ -1662,18 +1908,64 @@
       };
 
       const handleWheel = (event) => {
+        const rotationZone = event.target.closest(".figure-rotation-hotspot");
         const controlZone = event.target.closest(
           ".figure-wheel-hotspot, .figure-wheel-zone, .figure-drag-hotspot"
         );
 
-        if (!controlZone) {
+        if (!controlZone && !rotationZone) {
           return;
         }
 
         event.preventDefault();
         event.stopPropagation();
+        wheelLockUntilRef.current = Date.now() + WHEEL_LOCK_TTL_MS;
+        lockGlobalWheelScroll();
+
+        if (rotationZone) {
+          cancelRotationInertia(false);
+          const direction = event.deltaY < 0 ? 1 : -1;
+          const nextAngleDeg = stepSocketAngle(
+            axialRotationDegRef.current,
+            direction,
+            specRef.current
+          );
+
+          if (nextAngleDeg === axialRotationDegRef.current) {
+            return;
+          }
+
+          markHighChurn({ type: "rotation" });
+          onSetAxialRotation?.(nextAngleDeg);
+          return;
+        }
+
         const fieldName = controlZone.getAttribute("data-field-name");
+        const field = FIELD_CONFIG_MAP[fieldName];
         const direction = event.deltaY < 0 ? 1 : -1;
+        const nowMs = Date.now();
+
+        if (field?.type === "enum") {
+          const throttleUntilMs = enumWheelThrottleMapRef.current.get(fieldName) || 0;
+
+          markActiveWheelField(fieldName);
+
+          if (nowMs < throttleUntilMs) {
+            return;
+          }
+
+          enumWheelThrottleMapRef.current.set(
+            fieldName,
+            nowMs + ENUM_WHEEL_STEP_COOLDOWN_MS
+          );
+          markHighChurn({
+            type: "wheel",
+            fieldName,
+          });
+          handlersRef.current.onAdjustField?.(fieldName, direction);
+          return;
+        }
+
         const stepSize = FIELD_STEP_MAP[fieldName] || 1;
         const currentValue = Number(specRef.current[fieldName]);
         const bounds = getFieldBounds(specRef.current, fieldName);
@@ -1693,8 +1985,6 @@
           triggerConstraintFlash();
         }
 
-        wheelLockUntilRef.current = Date.now() + WHEEL_LOCK_TTL_MS;
-        lockGlobalWheelScroll();
         markActiveWheelField(fieldName);
         if (appliedValue === currentValue) {
           return;
@@ -1708,10 +1998,10 @@
 
       const handlePointerDown = (event) => {
         const isMousePointer = event.pointerType === "mouse";
+        const isTouchLikePointer = event.pointerType === "touch" || event.pointerType === "pen";
         const isDirectManipulationPointer = (
           isMousePointer ||
-          event.pointerType === "touch" ||
-          event.pointerType === "pen"
+          isTouchLikePointer
         );
 
         if (!isDirectManipulationPointer) {
@@ -1720,22 +2010,67 @@
 
         const wheelZone = event.target.closest(".figure-wheel-hotspot");
         const dragZone = event.target.closest(".figure-drag-hotspot");
+        const rotationZone = event.target.closest(".figure-rotation-hotspot");
         const topViewToggle = event.target.closest(".figure-corner-toggle");
 
         if (wheelZone) {
+          cancelRotationInertia(false);
           return;
         }
 
         if (topViewToggle) {
+          cancelRotationInertia(false);
           return;
         }
 
         if (dragZone) {
+          cancelRotationInertia(false);
           if (isMousePointer && event.button !== 0) {
             return;
           }
 
           beginDrag(event, dragZone, isMousePointer ? 0 : DRAG_HOLD_MS);
+          return;
+        }
+
+        if (rotationZone) {
+          if (isMousePointer && event.button !== 0) {
+            return;
+          }
+
+          // The head owns rotation. Outside that hotspot, mobile horizontal
+          // swipes are handled by the scroll viewport itself.
+          if (event.cancelable) {
+            event.preventDefault();
+          }
+
+          cancelRotationInertia(false);
+          clearPendingDrag();
+          clearActiveDrag();
+          clearPendingRotation();
+          clearActiveRotation();
+
+          rotationPendingRef.current = {
+            pointerId: event.pointerId,
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            startAngleDeg: axialRotationDegRef.current,
+          };
+
+          try {
+            container.setPointerCapture(event.pointerId);
+          } catch (error) {
+            // Ignore capture failures; the gesture can still proceed without it.
+          }
+
+          if (isTouchLikePointer && isMobileViewportRef.current) {
+            setIsMobileDragScrollLocked(true);
+          }
+
+          if (isMousePointer) {
+            activateRotation();
+          }
+
           return;
         }
 
@@ -1768,10 +2103,45 @@
 
         clearPendingDrag();
         clearActiveDrag();
+        cancelRotationInertia(false);
         onDismissField?.();
       };
 
       const handlePointerMove = (event) => {
+        const pendingRotation = rotationPendingRef.current;
+
+        if (pendingRotation?.pointerId === event.pointerId) {
+          const deltaX = event.clientX - pendingRotation.startClientX;
+          const deltaY = event.clientY - pendingRotation.startClientY;
+
+          if (
+            Math.abs(deltaY) >= ROTATION_DRAG_THRESHOLD_PX &&
+            Math.abs(deltaY) > Math.abs(deltaX) + 2
+          ) {
+            if (event.cancelable) {
+              event.preventDefault();
+            }
+
+            activateRotation();
+            updateRotationGesture(event);
+            return;
+          }
+
+          if (
+            Math.abs(deltaX) >= ROTATION_DRAG_THRESHOLD_PX &&
+            Math.abs(deltaX) > Math.abs(deltaY) + 2
+          ) {
+            clearPendingRotation();
+          }
+
+          return;
+        }
+
+        if (rotationGestureRef.current?.pointerId === event.pointerId) {
+          updateRotationGesture(event);
+          return;
+        }
+
         const pendingDrag = dragPendingRef.current;
 
         if (pendingDrag?.pointerId === event.pointerId) {
@@ -1807,6 +2177,8 @@
       };
 
       const handlePointerEnd = (event) => {
+        const hadPendingRotation = rotationPendingRef.current?.pointerId === event.pointerId;
+        const hadActiveRotation = rotationGestureRef.current?.pointerId === event.pointerId;
         const hadPendingDrag = dragPendingRef.current?.pointerId === event.pointerId;
         const hadActiveDrag = dragGestureRef.current?.pointerId === event.pointerId;
 
@@ -1816,6 +2188,40 @@
             clientX: Number((event.clientX ?? 0).toFixed(2)),
             clientY: Number((event.clientY ?? 0).toFixed(2)),
           });
+        }
+
+        if (hadPendingRotation) {
+          clearPendingRotation();
+        }
+
+        if (hadActiveRotation) {
+          const activeRotation = rotationGestureRef.current;
+          const releaseTimeMs = performance.now();
+          const recentSamples = (activeRotation?.recentSamples || [])
+            .filter((sample) => releaseTimeMs - sample.tMs <= ROTATION_INERTIA_RELEASE_WINDOW_MS);
+          const firstSample = recentSamples[0] || null;
+          const lastSample = recentSamples[recentSamples.length - 1] || null;
+          const sampleDurationMs = (
+            firstSample && lastSample
+              ? Math.max(1, lastSample.tMs - firstSample.tMs)
+              : 0
+          );
+          const releaseVelocityDegPerMs = (
+            firstSample && lastSample && sampleDurationMs > 0
+              ? getSignedAngleDeltaDeg(firstSample.angleDeg, lastSample.angleDeg) / sampleDurationMs
+              : 0
+          );
+          const didStartInertia = startRotationInertia(releaseVelocityDegPerMs);
+
+          clearActiveRotation();
+
+          if (!didStartInertia) {
+            const snappedAngleDeg = snapAngleToSocket(axialRotationDegRef.current, specRef.current);
+
+            if (Math.abs(snappedAngleDeg - axialRotationDegRef.current) > 0.001) {
+              onSetAxialRotation?.(snappedAngleDeg);
+            }
+          }
         }
 
         if (hadPendingDrag) {
@@ -1850,6 +2256,9 @@
 
       return () => {
         flushDragTrace("effect-cleanup");
+        cancelRotationInertia(false);
+        clearPendingRotation();
+        clearActiveRotation();
         clearPendingDrag();
         clearActiveDrag();
         clearDebouncedDragUpdate();
@@ -1862,9 +2271,11 @@
       };
     }, [
       beginOverlayRefitSuppression,
+      cancelRotationInertia,
       markActiveWheelField,
       markHighChurn,
       onDismissField,
+      onSetAxialRotation,
       onSelectField,
       triggerConstraintFlash,
     ]);
@@ -1889,15 +2300,30 @@
       isInteractionOverlaySuppressed ||
       Boolean(externalFreezeFieldName)
     );
-    const mobileReadoutFieldName = isMobileViewport
+    const isRotationMotionActive = (
+      isRotationDragActive ||
+      activeInteractionFocus?.type === "rotation"
+    );
+    const mobileReadoutFieldName = isMobileViewport && !isRotationMotionActive
       ? (activeDragFieldName || activeWheelFieldName || null)
       : null;
     const mobileReadoutField = mobileReadoutFieldName
       ? FIELD_CONFIG_MAP[mobileReadoutFieldName] || null
       : null;
-    const mobileReadoutValue = React.useMemo(() => {
+    const mobileReadout = React.useMemo(() => {
       if (!mobileReadoutFieldName || !mobileReadoutField) {
         return null;
+      }
+
+      if (mobileReadoutField.type === "enum") {
+        const matchingOption = Array.isArray(mobileReadoutField.options)
+          ? mobileReadoutField.options.find((option) => option.value === spec[mobileReadoutFieldName])
+          : null;
+
+        return {
+          label: mobileReadoutField.label,
+          value: matchingOption?.label || String(spec[mobileReadoutFieldName] ?? ""),
+        };
       }
 
       const rawValue = Number(spec[mobileReadoutFieldName]);
@@ -1909,7 +2335,10 @@
       const decimals = getStepDecimals(mobileReadoutField.step);
       const unitSuffix = mobileReadoutField.unit ? ` ${mobileReadoutField.unit}` : "";
 
-      return `${rawValue.toFixed(decimals)}${unitSuffix}`;
+      return {
+        label: mobileReadoutField.label,
+        value: `${rawValue.toFixed(decimals)}${unitSuffix}`,
+      };
     }, [mobileReadoutField, mobileReadoutFieldName, spec]);
 
     return (
@@ -1942,13 +2371,13 @@
             aria-hidden="true"
           />
         ) : null}
-        {mobileReadoutValue ? (
+        {mobileReadout ? (
           <div className="figure-mobile-readout" aria-hidden="true">
             <div className="figure-mobile-readout-label">
-              {mobileReadoutField.label}
+              {mobileReadout.label}
             </div>
             <div className="figure-mobile-readout-value">
-              {mobileReadoutValue}
+              {mobileReadout.value}
             </div>
           </div>
         ) : null}
@@ -1973,12 +2402,46 @@
                 textScale={figureTextScale}
               />
             </div>
+            {checkpointGhostScene && checkpointGhostFrame ? (
+              <div
+                key={checkpointGhost.id}
+                className="figure-checkpoint-ghost"
+                aria-hidden="true"
+              >
+                <div
+                  className="figure-checkpoint-ghost-scene"
+                  style={{
+                    animationDuration: `${checkpointGhost.durationMs || 920}ms`,
+                  }}
+                >
+                  <BoltFigureSvg
+                    scene={checkpointGhostScene}
+                    frameMinX={checkpointGhostFrame.viewMinX}
+                    frameWidth={checkpointGhostFrame.viewWidth}
+                    frameHeight={checkpointGhostFrame.viewHeight}
+                    textScale={figureTextScale}
+                    showBackground={false}
+                  />
+                </div>
+              </div>
+            ) : null}
             <div
               className={`figure-interaction-overlay ${
                 shouldHideInteractionOverlay ? "is-suppressed" : ""
               }`}
               aria-hidden="true"
             >
+              {!shouldHideInteractionOverlay ? (
+                <div
+                  className="figure-rotation-hotspot"
+                  style={{
+                    left: `${((scene.rotationHotspot.x - renderFrame.viewMinX) / renderFrame.viewWidth) * 100}%`,
+                    top: `${(scene.rotationHotspot.y / renderFrame.viewHeight) * 100}%`,
+                    width: `${(scene.rotationHotspot.width / renderFrame.viewWidth) * 100}%`,
+                    height: `${(scene.rotationHotspot.height / renderFrame.viewHeight) * 100}%`,
+                  }}
+                />
+              ) : null}
               {!shouldHideInteractionOverlay ? visibleWheelHotspots.map((hotspot) => (
                 <div
                   key={hotspot.key}

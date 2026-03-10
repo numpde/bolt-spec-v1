@@ -20,7 +20,6 @@
     cloneBoltPreset,
     DEFAULT_EDITABLE_BOLT_SPEC,
     getBoltPresets,
-    getDefaultPresetKey,
   } = presetApi;
   const { normalizeBoltSpec } = modelApi;
   const {
@@ -32,20 +31,19 @@
 
   const CHECKPOINT_HISTORY_KIND = "bolt-checkpoint-v1";
   const EDITABLE_FIELD_NAMES = BOLT_FIELDS.map((field) => field.name);
+  const FIELD_MAP = Object.fromEntries(BOLT_FIELDS.map((field) => [field.name, field]));
 
-  const resolvePresetKey = (presetKey) => {
+  const resolveLegacyPresetKey = (presetKey) => {
     const presets = getBoltPresets();
-    const defaultPresetKey = getDefaultPresetKey();
-
     return Object.prototype.hasOwnProperty.call(presets, presetKey)
       ? presetKey
-      : defaultPresetKey;
+      : null;
   };
 
-  const coerceDraftSpec = (presetKey, draftSpec = {}) => {
+  const coerceDraftSpec = (draftSpec = {}, legacyPresetKey = null) => {
     const normalizedSpec = normalizeBoltSpec({
       ...DEFAULT_EDITABLE_BOLT_SPEC,
-      ...cloneBoltPreset(presetKey),
+      ...(legacyPresetKey ? cloneBoltPreset(legacyPresetKey) : {}),
       ...draftSpec,
     });
 
@@ -55,9 +53,11 @@
   };
 
   const normalizeCheckpointState = (checkpointLike) => {
-    const presetName = resolvePresetKey(checkpointLike?.presetName);
-    const draftSpec = coerceDraftSpec(presetName, checkpointLike?.draftSpec);
-    const presetStandardProfileKey = cloneBoltPreset(presetName).standardProfileKey;
+    const legacyPresetKey = resolveLegacyPresetKey(checkpointLike?.presetName);
+    const draftSpec = coerceDraftSpec(checkpointLike?.draftSpec, legacyPresetKey);
+    const presetStandardProfileKey = legacyPresetKey
+      ? cloneBoltPreset(legacyPresetKey).standardProfileKey
+      : null;
     const standardProfileKey = resolveThreadStandardProfileKey(
       checkpointLike?.standardProfileKey ||
       presetStandardProfileKey ||
@@ -65,7 +65,6 @@
     );
 
     return {
-      presetName,
       standardProfileKey,
       draftSpec,
     };
@@ -75,7 +74,6 @@
     const checkpoint = normalizeCheckpointState(checkpointLike);
     const params = new URLSearchParams();
 
-    params.set("preset", checkpoint.presetName);
     params.set("std", checkpoint.standardProfileKey);
 
     EDITABLE_FIELD_NAMES.forEach((fieldName) => {
@@ -107,7 +105,6 @@
       return null;
     }
 
-    const presetName = resolvePresetKey(params.get("preset"));
     const draftSpec = {};
 
     EDITABLE_FIELD_NAMES.forEach((fieldName) => {
@@ -115,15 +112,25 @@
         return;
       }
 
-      const parsedValue = Number(params.get(fieldName));
+      const rawValue = params.get(fieldName);
+      const field = FIELD_MAP[fieldName];
 
-      if (Number.isFinite(parsedValue)) {
-        draftSpec[fieldName] = parsedValue;
+      if (field?.type === "number") {
+        const parsedValue = Number(rawValue);
+
+        if (Number.isFinite(parsedValue)) {
+          draftSpec[fieldName] = parsedValue;
+        }
+        return;
+      }
+
+      if (typeof rawValue === "string" && rawValue) {
+        draftSpec[fieldName] = rawValue;
       }
     });
 
     return normalizeCheckpointState({
-      presetName,
+      presetName: params.get("preset"),
       standardProfileKey: params.get("std"),
       draftSpec,
     });

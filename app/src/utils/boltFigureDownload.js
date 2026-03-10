@@ -2,10 +2,13 @@
   const checkpointApi = typeof module === "object" && module.exports
     ? require("./checkpointUrl.js")
     : root;
+  const presetApi = typeof module === "object" && module.exports
+    ? require("./boltPresets.js")
+    : root;
   const figureApi = typeof module === "object" && module.exports
     ? require("./boltFigureRenderer.js")
     : root;
-  const api = factory(checkpointApi, figureApi);
+  const api = factory(checkpointApi, presetApi, figureApi);
 
   if (typeof module === "object" && module.exports) {
     module.exports = api;
@@ -14,10 +17,13 @@
   if (root) {
     Object.assign(root, api);
   }
-})(typeof globalThis !== "undefined" ? globalThis : this, function(checkpointApi, figureApi) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function(checkpointApi, presetApi, figureApi) {
   const {
     normalizeCheckpointState,
   } = checkpointApi;
+  const {
+    formatBoltSizeTag,
+  } = presetApi;
   const {
     renderBoltFigureSvg,
     buildBoltFigureScene,
@@ -50,24 +56,31 @@
   };
 
   const buildFigureFileStem = (checkpoint) => {
-    const checkpointLabel = checkpoint.presetName.toUpperCase();
-    const nominal = checkpoint.draftSpec.nominalDiameterMm.toFixed(1).replace(".", "_");
+    const sizeTag = formatBoltSizeTag(checkpoint.draftSpec)
+      .toLowerCase()
+      .replace(/⌀/g, "d")
+      .replace(/[^\w.-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
     const length = checkpoint.draftSpec.underHeadLengthMm.toFixed(1).replace(".", "_");
 
-    return `bolt-${checkpointLabel}-d${nominal}-l${length}`;
+    return `bolt-${sizeTag}-l${length}`;
   };
 
   const downloadCheckpointFigure = async (checkpointLike, options = {}) => {
     const checkpoint = normalizeCheckpointState(checkpointLike);
     const showTopView = options.showTopView !== false;
+    const axialRotationDeg = Number(options.axialRotationDeg) || 0;
     const scene = buildBoltFigureScene(checkpoint.draftSpec, {
       showTopView,
       detailLevel: "full",
+      axialRotationDeg,
     });
     const svgMarkup = renderBoltFigureSvg(checkpoint.draftSpec, {
       showTopView,
       detailLevel: "full",
       includeWheelZones: false,
+      axialRotationDeg,
     });
     const svgUrl = URL.createObjectURL(new Blob(
       [svgMarkup],

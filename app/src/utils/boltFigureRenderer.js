@@ -15,7 +15,14 @@
     Object.assign(root, api);
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function(svgApi, modelApi) {
-  const { pointsToPath, buildTorxPath, escapeXml } = svgApi;
+  const {
+    pointsToPath,
+    buildTorxPoints,
+    buildHexPoints,
+    transformProfilePoints,
+    escapeXml,
+    normalizeRotationDeg,
+  } = svgApi;
   const { normalizeBoltSpec } = modelApi;
 
   const FIGURE_SVG_STYLE = `
@@ -157,6 +164,7 @@
     const spec = normalizeBoltSpec(inputSpec);
     const layoutMode = options.layoutMode === "mobile-scroll" ? "mobile-scroll" : "default";
     const isMobileScrollLayout = layoutMode === "mobile-scroll";
+    const axialRotationDeg = normalizeRotationDeg(options.axialRotationDeg || 0);
     const showTopView = layoutMode === "mobile-scroll"
       ? true
       : options.showTopView !== false;
@@ -214,15 +222,25 @@
 
     const threadLines = buildThreadLines(spec, detailLevel);
     const socketDepthX = mmToPxX(Math.min(spec.socketDepthVisibleMm, spec.headHeightMm));
-    const socketHalfHeightPx = spec.socketOuterRadiusMm * scale;
     const shankStartPx = mmToPxX(spec.headHeightMm);
     const tipPx = mmToPxX(spec.headHeightMm + spec.underHeadLengthMm);
-    const torxPath = buildTorxPath(
+    const socketProfilePoints = spec.socketShape === "hex"
+      ? buildHexPoints(spec.socketAcrossFlatsMm * scale)
+      : buildTorxPoints(
+        spec.socketPathOuterRadiusMm * scale,
+        spec.socketPathInnerRadiusMm * scale,
+        detailLevel === "fast" ? 24 : 96
+      );
+    const rotatedSocketProfilePoints = transformProfilePoints(
+      socketProfilePoints,
       centerX,
       topCenterY,
-      spec.socketOuterRadiusMm * scale,
-      spec.socketInnerRadiusMm * scale,
-      detailLevel === "fast" ? 24 : 96
+      axialRotationDeg
+    );
+    const socketPath = pointsToPath(rotatedSocketProfilePoints);
+    const socketEnvelopeHalfHeightPx = rotatedSocketProfilePoints.reduce(
+      (currentMax, point) => Math.max(currentMax, Math.abs(point.y - topCenterY)),
+      0
     );
     const topDimensionLineY = sideTopY - 28;
     const dimensionTextGapPx = 12;
@@ -272,21 +290,21 @@
     const socketHiddenLines = [
       {
         x1: partLeftX,
-        y1: sideCenterY - socketHalfHeightPx,
+        y1: sideCenterY - socketEnvelopeHalfHeightPx,
         x2: socketDepthX,
-        y2: sideCenterY - socketHalfHeightPx,
+        y2: sideCenterY - socketEnvelopeHalfHeightPx,
       },
       {
         x1: partLeftX,
-        y1: sideCenterY + socketHalfHeightPx,
+        y1: sideCenterY + socketEnvelopeHalfHeightPx,
         x2: socketDepthX,
-        y2: sideCenterY + socketHalfHeightPx,
+        y2: sideCenterY + socketEnvelopeHalfHeightPx,
       },
       {
         x1: socketDepthX,
-        y1: sideCenterY - socketHalfHeightPx,
+        y1: sideCenterY - socketEnvelopeHalfHeightPx,
         x2: socketDepthX,
-        y2: sideCenterY + socketHalfHeightPx,
+        y2: sideCenterY + socketEnvelopeHalfHeightPx,
       },
     ];
 
@@ -297,6 +315,7 @@
       viewWidth,
       viewHeight,
       layoutMode,
+      axialRotationDeg,
       showTopView,
       sideViewportWidth,
       sideFramedScrollLeft,
@@ -305,8 +324,29 @@
       topCircleRadiusPx,
       centerline,
       sideOutlinePath,
-      torxPath,
+      socketPath,
       socketHiddenLines,
+      socketLabelHotspot: showTopView ? buildTextWheelRect({
+        key: "socket:wheel",
+        fieldName: "socket",
+        text: spec.socket,
+        centerX,
+        centerY: topCenterY + topCircleRadiusPx + 22,
+        scene: {
+          viewMinX,
+          viewWidth,
+          viewHeight,
+        },
+      }) : null,
+      // Mobile uses the whole figure viewport for horizontal swiping. Only the
+      // head gets a dedicated rotation hotspot; the shank is intentionally left
+      // without its own overlay so native viewport swipes work there.
+      rotationHotspot: {
+        x: partLeftX,
+        y: sideTopY,
+        width: spec.headHeightMm * scale,
+        height: sideBottomY - sideTopY,
+      },
       threadLines: {
         top: threadLines.topLines.map((line) => ({
           x1: mmToPxX(line.x1),
@@ -398,6 +438,7 @@
       .map((line) => renderLine("figure-dim", line))
       .join("")
   );
+  const estimateTextWidthPx = (text) => String(text).length * 7.1;
 
   const clampRectToScene = (rect, scene) => {
     const minX = Number.isFinite(scene.viewMinX) ? scene.viewMinX : 0;
@@ -448,6 +489,50 @@
     return {
       key: `${dimension.fieldName}:wheel`,
       fieldName: dimension.fieldName,
+      hintX: hintRect.x,
+      hintY: hintRect.y,
+      hintWidth: hintRect.width,
+      hintHeight: hintRect.height,
+      hitX: hitRect.x,
+      hitY: hitRect.y,
+      hitWidth: hitRect.width,
+      hitHeight: hitRect.height,
+      radius: hintHeight / 2,
+    };
+  };
+
+  const buildTextWheelRect = ({
+    key,
+    fieldName,
+    text,
+    centerX,
+    centerY,
+    scene,
+  }) => {
+    if (!fieldName) {
+      return null;
+    }
+
+    const hintWidth = Math.max(72, estimateTextWidthPx(text) + 24);
+    const hintHeight = 34;
+    const hitWidth = hintWidth * 2;
+    const hitHeight = 68;
+    const hintRect = clampRectToScene({
+      x: centerX - hintWidth / 2,
+      y: centerY - hintHeight / 2,
+      width: hintWidth,
+      height: hintHeight,
+    }, scene);
+    const hitRect = clampRectToScene({
+      x: centerX - hitWidth / 2,
+      y: centerY - hitHeight / 2,
+      width: hitWidth,
+      height: hitHeight,
+    }, scene);
+
+    return {
+      key,
+      fieldName,
       hintX: hintRect.x,
       hintY: hintRect.y,
       hintWidth: hintRect.width,
@@ -537,14 +622,17 @@
   );
 
   const buildWheelHotspots = (scene) => (
-    scene.dimensions
-      .map((dimension) => buildDimensionWheelRect(dimension, scene))
+    [
+      ...scene.dimensions.map((dimension) => buildDimensionWheelRect(dimension, scene)),
+      scene.socketLabelHotspot,
+    ]
       .filter(Boolean)
   );
 
   const renderBoltFigureSvg = (inputSpec, options = {}) => {
     const scene = buildBoltFigureScene(inputSpec, options);
     const includeWheelZones = options.includeWheelZones !== false;
+    const wheelHotspots = buildWheelHotspots(scene);
     const {
       spec,
       viewMinX,
@@ -556,7 +644,7 @@
       topCircleRadiusPx,
       centerline,
       sideOutlinePath,
-      torxPath,
+      socketPath,
       socketHiddenLines,
       threadLines,
       dimensions,
@@ -577,14 +665,20 @@
         includeWheelZones ? renderDimensionWheelZone(dimension, scene) : "",
         `<text class="figure-text" text-anchor="${dimension.textAnchor}" x="${dimension.textX}" y="${dimension.textY}">${escapeXml(dimension.label)}</text>`,
       ].join("")).join(""),
+      includeWheelZones
+        ? wheelHotspots
+          .filter((hotspot) => hotspot.fieldName === "socket")
+          .map((hotspot) => `<rect class="figure-wheel-zone" data-field-name="${hotspot.fieldName}" x="${hotspot.hintX}" y="${hotspot.hintY}" width="${hotspot.hintWidth}" height="${hotspot.hintHeight}" rx="${hotspot.radius}" ry="${hotspot.radius}" />`)
+          .join("")
+        : "",
       showTopView
         ? `<circle class="figure-line" cx="${centerX}" cy="${topCenterY}" r="${topCircleRadiusPx}" />`
         : "",
       showTopView
-        ? `<path class="figure-line" d="${torxPath}" />`
+        ? `<path class="figure-line" d="${socketPath}" />`
         : "",
       showTopView
-        ? `<text class="figure-text" text-anchor="middle" x="${centerX}" y="${topCenterY + topCircleRadiusPx + 26}">${escapeXml(spec.driveLabel)}</text>`
+        ? `<text class="figure-text" text-anchor="middle" x="${centerX}" y="${topCenterY + topCircleRadiusPx + 26}">${escapeXml(spec.socket)}</text>`
         : "",
       `</svg>`,
     ].join("");
