@@ -8,13 +8,14 @@ const {
   cloneBoltPreset,
   getBoltPresets,
 } = require("../app/src/utils/boltPresets.js");
+const { BOLT_DEFAULT_THEME_KEY } = require("../app/src/utils/boltTheme.js");
 const { renderBoltFigureSvg } = require("../app/src/utils/boltFigureRenderer.js");
 
 const parseArgs = (argv) => {
   const options = {
     preset: "m5",
     rotation: 0,
-    theme: "light",
+    theme: BOLT_DEFAULT_THEME_KEY,
   };
 
   for (let index = 0; index < argv.length; index += 1) {

@@ -8,7 +8,10 @@
   const figureApi = typeof module === "object" && module.exports
     ? require("./boltFigureRenderer.js")
     : root;
-  const api = factory(checkpointApi, presetApi, figureApi);
+  const themeApi = typeof module === "object" && module.exports
+    ? require("./boltTheme.js")
+    : root;
+  const api = factory(checkpointApi, presetApi, figureApi, themeApi);
 
   if (typeof module === "object" && module.exports) {
     module.exports = api;
@@ -17,7 +20,7 @@
   if (root) {
     Object.assign(root, api);
   }
-})(typeof globalThis !== "undefined" ? globalThis : this, function(checkpointApi, presetApi, figureApi) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function(checkpointApi, presetApi, figureApi, themeApi) {
   const {
     normalizeCheckpointState,
   } = checkpointApi;
@@ -28,6 +31,9 @@
     renderBoltFigureSvg,
     buildBoltFigureScene,
   } = figureApi;
+  const {
+    BOLT_DEFAULT_THEME_KEY,
+  } = themeApi;
 
   const loadImage = (url) => new Promise((resolve, reject) => {
     const image = new Image();
@@ -71,7 +77,7 @@
     const checkpoint = normalizeCheckpointState(checkpointLike);
     const showTopView = options.showTopView !== false;
     const axialRotationDeg = Number(options.axialRotationDeg) || 0;
-    const themeKey = options.themeKey || "light";
+    const themeKey = options.themeKey || BOLT_DEFAULT_THEME_KEY;
     const scene = buildBoltFigureScene(checkpoint.draftSpec, {
       showTopView,
       detailLevel: "full",

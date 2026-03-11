@@ -17,6 +17,7 @@
   );
 
   const BOLT_THEME_STORAGE_KEY = "bolt-theme-preference-v1";
+  const BOLT_DEFAULT_THEME_KEY = "dark";
 
   const BASE_LIGHT_THEME_CSS_VARS = Object.freeze({
     "--radius": "22px",
@@ -338,7 +339,10 @@
     [BOLT_DARK_THEME.key]: BOLT_DARK_THEME,
   });
 
-  const getBoltThemeByKey = (themeKey) => BOLT_THEMES[themeKey] || BOLT_LIGHT_THEME;
+  const getBoltThemeByKey = (themeKey = BOLT_DEFAULT_THEME_KEY) => (
+    BOLT_THEMES[themeKey] || BOLT_THEMES[BOLT_DEFAULT_THEME_KEY]
+  );
+  const BOLT_DEFAULT_THEME = getBoltThemeByKey();
 
   const readStoredBoltThemeKey = (storage = globalThis?.localStorage) => {
     if (!storage) {
@@ -353,22 +357,14 @@
     }
   };
 
-  const resolveInitialBoltThemeKey = (storage = globalThis?.localStorage, mediaMatcher = globalThis?.matchMedia) => {
+  const resolveInitialBoltThemeKey = (storage = globalThis?.localStorage) => {
     const storedThemeKey = readStoredBoltThemeKey(storage);
 
     if (storedThemeKey) {
       return storedThemeKey;
     }
 
-    try {
-      if (typeof mediaMatcher === "function" && mediaMatcher("(prefers-color-scheme: dark)").matches) {
-        return BOLT_DARK_THEME.key;
-      }
-    } catch (error) {
-      // Fall through to the default light theme.
-    }
-
-    return BOLT_LIGHT_THEME.key;
+    return BOLT_DEFAULT_THEME_KEY;
   };
 
   const serializeCssVars = (cssVars, selector = ":root") => {
@@ -379,13 +375,13 @@
     return `${selector}{${declarations}}`;
   };
 
-  const serializeBoltThemeCssVars = (theme = BOLT_LIGHT_THEME, selector = ":root") => (
+  const serializeBoltThemeCssVars = (theme = BOLT_DEFAULT_THEME, selector = ":root") => (
     `${selector}{color-scheme:${theme.colorScheme || "light"};${Object.entries(theme.cssVars || {})
       .map(([name, value]) => `${name}: ${value};`)
       .join("")}}`
   );
 
-  const applyBoltThemeCssVars = (target = document.documentElement, theme = BOLT_LIGHT_THEME) => {
+  const applyBoltThemeCssVars = (target = document.documentElement, theme = BOLT_DEFAULT_THEME) => {
     target.style.colorScheme = theme.colorScheme || "light";
 
     Object.entries(theme.cssVars || {}).forEach(([name, value]) => {
@@ -393,7 +389,7 @@
     });
   };
 
-  const buildBoltFigureSvgStyle = (theme = BOLT_LIGHT_THEME) => {
+  const buildBoltFigureSvgStyle = (theme = BOLT_DEFAULT_THEME) => {
     const figureVarNames = Object.keys(theme.cssVars || {}).filter((name) => (
       name.startsWith("--figure-")
     ));
@@ -415,12 +411,14 @@
   `;
   };
 
-  const getBoltFigureBackgroundFill = (theme = BOLT_LIGHT_THEME) => (
+  const getBoltFigureBackgroundFill = (theme = BOLT_DEFAULT_THEME) => (
     theme.cssVars?.["--figure-paper"] || "#f7f1e8"
   );
 
   return {
+    BOLT_DEFAULT_THEME,
     BOLT_DARK_THEME,
+    BOLT_DEFAULT_THEME_KEY,
     BOLT_LIGHT_THEME,
     BOLT_THEMES,
     BOLT_THEME_STORAGE_KEY,

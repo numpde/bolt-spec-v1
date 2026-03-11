@@ -28,14 +28,14 @@
   } = svgApi;
   const { normalizeBoltSpec } = modelApi;
   const {
-    BOLT_LIGHT_THEME,
+    BOLT_DEFAULT_THEME,
     buildBoltFigureSvgStyle,
     getBoltFigureBackgroundFill,
     getBoltThemeByKey,
   } = themeApi;
 
-  const FIGURE_SVG_STYLE = buildBoltFigureSvgStyle(BOLT_LIGHT_THEME);
-  const FIGURE_BACKGROUND_FILL = getBoltFigureBackgroundFill(BOLT_LIGHT_THEME);
+  const FIGURE_SVG_STYLE = buildBoltFigureSvgStyle(BOLT_DEFAULT_THEME);
+  const FIGURE_BACKGROUND_FILL = getBoltFigureBackgroundFill(BOLT_DEFAULT_THEME);
 
   const getBoltFigureAriaLabel = (showTopView) => (
     showTopView ? "Live bolt side and top views" : "Live bolt side view"

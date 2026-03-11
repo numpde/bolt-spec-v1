@@ -1,6 +1,7 @@
 (function() {
   const {
     applyBoltThemeCssVars,
+    BOLT_DEFAULT_THEME_KEY,
     applySizeFamilyToDraftSpec,
     BOLT_THEME_STORAGE_KEY,
     getBoltPresets,
@@ -40,7 +41,7 @@
   const TOP_VIEW_PREFERENCE_STORAGE_KEY = "bolt-top-view-preference-v1";
   const readInitialThemeKey = () => {
     if (typeof window === "undefined") {
-      return "light";
+      return BOLT_DEFAULT_THEME_KEY;
     }
 
     return window.__BOLT_INITIAL_THEME_KEY__ || resolveInitialBoltThemeKey();

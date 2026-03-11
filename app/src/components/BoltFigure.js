@@ -1,5 +1,6 @@
 (function() {
   const {
+    BOLT_DEFAULT_THEME_KEY,
     buildBoltFigureScene,
     buildDragHotspots,
     buildWheelHotspots,
@@ -360,7 +361,7 @@
 
   const BoltFigure = ({
     spec,
-    themeKey = "light",
+    themeKey = BOLT_DEFAULT_THEME_KEY,
     axialRotationDeg = 0,
     onAdjustField,
     onStepAdjustField,
