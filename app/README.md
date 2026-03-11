@@ -1,78 +1,90 @@
 # Bolt Live App
 
-Static no-backend React app for live bolt modeling.
+Static browser app for live bolt sketching and parameter editing.
 
-The app now ships fully locally:
+This app has:
 
-- React is vendored under `app/static/vendor/`
-- Babel standalone is vendored under `app/static/vendor/`
-- the two UI typefaces are vendored under `app/static/fonts/`
+- no backend
+- no bundler
+- fully local runtime assets
+- URL-shareable bolt specs
+- local persistence for picks and UI preferences
 
-So the page can render without any CDN access, which also makes browser
-automation via Playwright/Codex much more reliable.
-
-The structure intentionally mirrors the lightweight pattern in
-`/home/coder2/repos/protein-pharm-bib`:
-
-- `index.html`: single static entrypoint, no bundler
-- `src/`: browser-side React components and geometry helpers
-- `static/`: local assets if we later want vendored libraries, icons, or snapshots
-
-## Current Scope
-
-This scaffold is meant to be the fast iteration layer:
-
-- edit `M5` / `M6` parameters in the browser
-- see a live side view and top view
-- keep everything in one parameter object
-- stay fully static so it can be opened or served without a backend
-
-The preview is intentionally lightweight. It is a browser-side SVG sketch,
-not a CAD kernel.
+It is intended to run as a plain static site, including on GitHub Pages.
 
 ## Layout
 
-- `src/index.js`: mounts `window.App`
-- `src/App.js`: app shell and shared state
-- `src/styles.css`: page styling
-- `src/utils/boltPresets.js`: editable preset data and field metadata
-- `src/utils/boltModel.js`: normalization and derived dimensions
-- `src/utils/boltSvg.js`: SVG path helpers
-- `src/components/PresetPicker.js`: `M5` / `M6` preset controls
-- `src/components/ParameterPanel.js`: numeric parameter form
-- `src/components/BoltFigure.js`: live side/top SVG drawing
-- `src/components/SpecSummary.js`: derived values and current modeling assumptions
+- `index.html`: static entrypoint and script/style loading
+- `src/`: app code
+- `static/`: local assets and data catalogs
 
-## Run
+Main source files:
 
-Either open `app/index.html` directly, or serve the repo root:
+- `src/App.js`: top-level state, history/checkpoint logic, theme, layout
+- `src/index.js`: app bootstrap and catalog loading
+- `src/styles.css`: theme-aware styling
+- `src/components/BoltFigure.js`: live figure, pills, gestures, mobile behavior
+- `src/components/ParameterPanel.js`: editable bolt spec form
+- `src/components/PresetPicker.js`: preset list
+- `src/components/LikedBoltsCard.js`: saved picks list
+- `src/components/FieldControlTray.js`: quick-adjust tray
+- `src/utils/boltSchema.js`: single source of truth for bolt fields
+- `src/utils/boltModel.js`: normalization and derived geometry
+- `src/utils/boltConstraints.js`: shared field constraints
+- `src/utils/boltPresets.js`: preset catalog helpers
+- `src/utils/boltStandards.js`: standards catalog and diagnostics
+- `src/utils/boltFigureRenderer.js`: shared SVG scene/render path
+- `src/utils/boltTheme.js`: theme tokens and default theme logic
+- `static/bolt-presets.yaml`: preset catalog
+- `static/thread-standards.yaml`: standards catalog
+- `static/vendor/`: vendored React / ReactDOM / Babel
+- `static/fonts/`: vendored fonts
+
+## Run locally
+
+Serve the repo root:
 
 ```bash
-python3 -m http.server
+python3 -m http.server 8123
 ```
 
-Then visit `http://localhost:8000/app/`.
+Then open:
 
-Local app assets are cache-busted on a short rolling revision window in
-`index.html`, so browser-side JS/CSS/YAML changes should refresh quickly even
-with a plain static server.
-
-For a fast artifact-only preview, render the shared figure directly:
-
-```bash
-node scripts/render_app_preview.js --preset m5
+```text
+http://localhost:8123/app/
 ```
 
-That writes:
+## Deploy
 
-- `app/preview/bolt-m5.svg`
+The app is static and uses only relative asset paths, so it is suitable for GitHub Pages.
 
-The SVG is the canonical fast-preview artifact. The page uses that same shared
-renderer, so there is no browser-only geometry path.
+Expected subpath deployment:
 
-## Likely Next Pieces
+```text
+https://<user>.github.io/<repo>/app/
+```
 
-- import the exact Torx profile from the Python-side reference extraction
-- export/import the current parameter set as JSON
-- add reference-image overlays inside the app
-- add a simplified mesh or STL viewer for quick visual checks
+## Copy to a standalone repo
+
+If you want this app in its own repository, copy:
+
+- `app/index.html`
+- `app/src/`
+- `app/static/`
+
+That is the complete app.
+
+If the new repository is only for the app, move those contents to the repo root after copying:
+
+- `index.html`
+- `src/`
+- `static/`
+
+Then serve the new repo root directly.
+
+## Notes
+
+- The app still uses in-browser Babel, so it is intentionally simple rather than optimized.
+- The page and the exported sketch share the same rendering/theme logic.
+- Bolt specs are encoded in the URL query string.
+- Theme and some UI preferences are stored in browser local storage.
