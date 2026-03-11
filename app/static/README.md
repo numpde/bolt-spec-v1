@@ -5,4 +5,5 @@ step, for example:
 
 - a small favicon
 - local screenshots or overlays
-- vendored browser libraries if CDN usage becomes undesirable
+- vendored browser libraries
+- local fonts

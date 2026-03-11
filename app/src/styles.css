@@ -1,4 +1,42 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap");
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../static/fonts/ibm-plex-mono-400.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../static/fonts/ibm-plex-mono-500.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../static/fonts/space-grotesk-400.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../static/fonts/space-grotesk-500.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../static/fonts/space-grotesk-700.ttf") format("truetype");
+}
 
 * {
   box-sizing: border-box;
@@ -404,15 +442,32 @@ h2 {
   margin-top: 14px;
 }
 
-.liked-bolt-name-input {
+.liked-bolt-name-input,
+.field-input {
   width: 100%;
-  padding: 11px 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--input-surface);
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  background:
+    linear-gradient(180deg, var(--input-surface-bottom), var(--input-surface-top));
+  box-shadow: var(--input-shadow);
+  color: var(--ink);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    background 120ms ease;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
-.liked-bolt-name-input:focus {
+.liked-bolt-name-input::placeholder,
+.field-input::placeholder {
+  color: var(--input-placeholder-ink);
+}
+
+.liked-bolt-name-input:focus,
+.field-input:focus {
   outline: 2px solid var(--input-focus-outline);
   border-color: var(--input-focus-border);
 }
@@ -544,22 +599,11 @@ h2 {
   vertical-align: baseline;
 }
 
-.field-input {
-  width: 100%;
-  padding: 11px 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--input-surface);
-}
-
-.field-input:focus {
-  outline: 2px solid var(--input-focus-outline);
-  border-color: var(--input-focus-border);
-}
-
 .field-input.is-invalid-raw {
   border-color: var(--input-invalid-border);
-  background: var(--input-invalid-surface);
+  background:
+    linear-gradient(180deg, var(--input-invalid-surface-top), var(--input-invalid-surface-bottom));
+  box-shadow: var(--input-invalid-shadow);
 }
 
 .field-input.is-invalid-raw:focus {

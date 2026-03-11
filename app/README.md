@@ -2,6 +2,15 @@
 
 Static no-backend React app for live bolt modeling.
 
+The app now ships fully locally:
+
+- React is vendored under `app/static/vendor/`
+- Babel standalone is vendored under `app/static/vendor/`
+- the two UI typefaces are vendored under `app/static/fonts/`
+
+So the page can render without any CDN access, which also makes browser
+automation via Playwright/Codex much more reliable.
+
 The structure intentionally mirrors the lightweight pattern in
 `/home/coder2/repos/protein-pharm-bib`:
 
