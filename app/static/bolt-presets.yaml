@@ -26,6 +26,7 @@ presets:
     displayName: Stem bolt M5 x 18 (T25)
     presetName: M5x18
     standardProfileKey: iso-metric-262
+    headShape: cylindrical
     socket: T25
     nominalDiameterMm: 5.0
     pitchMm: 0.8
@@ -35,3 +36,17 @@ presets:
     headHeightMm: 3.5
     tipChamferMm: 0.5
     socketDepthMm: 3.0
+  m5x18-countersunk:
+    displayName: Countersunk M5 x 18 (T25)
+    presetName: M5x18 CSK
+    standardProfileKey: iso-metric-262
+    headShape: countersunk
+    socket: T25
+    nominalDiameterMm: 5.0
+    pitchMm: 0.8
+    underHeadLengthMm: 18.0
+    threadedLengthMm: 13.0
+    headDiameterMm: 10.0
+    headHeightMm: 3.0
+    tipChamferMm: 0.5
+    socketDepthMm: 2.2

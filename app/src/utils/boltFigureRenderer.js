@@ -55,6 +55,19 @@
     const tipStartX = headEndX + spec.underHeadLengthMm - spec.tipChamferMm;
     const tipX = headEndX + spec.underHeadLengthMm;
 
+    if (spec.headShape === "countersunk") {
+      return [
+        { x: 0, y: -spec.headRadiusMm },
+        { x: headEndX, y: -spec.shankRadiusMm },
+        { x: tipStartX, y: -spec.shankRadiusMm },
+        { x: tipX, y: -spec.tipFlatRadiusMm },
+        { x: tipX, y: spec.tipFlatRadiusMm },
+        { x: tipStartX, y: spec.shankRadiusMm },
+        { x: headEndX, y: spec.shankRadiusMm },
+        { x: 0, y: spec.headRadiusMm },
+      ];
+    }
+
     return [
       { x: 0, y: -spec.headRadiusMm },
       { x: headEndX, y: -spec.headRadiusMm },

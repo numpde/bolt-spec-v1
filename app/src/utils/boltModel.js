@@ -77,6 +77,9 @@
   const getSocketConfig = (socket) => (
     SOCKET_CONFIGS[socket] || SOCKET_CONFIGS.T25
   );
+  const getHeadShape = (rawValue) => (
+    rawValue === "countersunk" ? "countersunk" : "cylindrical"
+  );
   const getEnumValue = (fieldName, rawValue) => {
     const fieldSchema = getBoltFieldSchema(fieldName);
     const options = Array.isArray(fieldSchema?.options) ? fieldSchema.options : [];
@@ -110,6 +113,7 @@
 
   const normalizeBoltSpec = (inputSpec) => {
     const material = getEnumValue("material", inputSpec.material);
+    const headShape = getHeadShape(inputSpec.headShape);
     const socket = getEnumValue("socket", inputSpec.socket || inputSpec.driveLabel);
     const nominalDiameterMm = clamp(
       Number(inputSpec.nominalDiameterMm) || getFieldDefault("nominalDiameterMm"),
@@ -173,6 +177,7 @@
 
     return {
       material,
+      headShape,
       socket,
       nominalDiameterMm: round3(nominalDiameterMm),
       pitchMm: round3(pitchMm),
@@ -201,6 +206,7 @@
 
   return {
     getHeadDiameterMinMm,
+    getHeadShape,
     getSocketEnvelopeDiameterMm,
     getThreadedLengthMaxMm,
     THREAD_LENGTH_OFFSET_MM,

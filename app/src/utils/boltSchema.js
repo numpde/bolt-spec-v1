@@ -15,6 +15,7 @@
 
   const BOLT_FIELD_ORDER = [
     "material",
+    "headShape",
     "nominalDiameterMm",
     "pitchMm",
     "underHeadLengthMm",
@@ -41,6 +42,22 @@
       options: [
         { value: "Steel", label: "Steel" },
         { value: "Titatium", label: "Titatium" },
+      ],
+    },
+    headShape: {
+      type: "enum",
+      label: "Head shape",
+      unit: "",
+      hint: "Outer head profile",
+      default: "cylindrical",
+      step: null,
+      ui: {
+        includeInDimensionPanel: true,
+      },
+      sizeFamily: false,
+      options: [
+        { value: "cylindrical", label: "Cylindrical" },
+        { value: "countersunk", label: "Countersunk" },
       ],
     },
     nominalDiameterMm: {
